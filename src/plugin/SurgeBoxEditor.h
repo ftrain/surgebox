@@ -14,6 +14,8 @@
 #include "gui/widgets/VoiceSelector.h"
 #include "gui/widgets/TransportControls.h"
 
+class SurgeJUCELookAndFeel;
+
 class SurgeBoxEditor : public juce::AudioProcessorEditor,
                        public juce::Timer,
                        public juce::Button::Listener,
@@ -89,6 +91,10 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     void updateKeyboardListener();
     void updateSurgeEditorScale();
     void updateMeasuresLabel();
+    void applySurgeLookAndFeel();
+
+    // Surge look-and-feel (shared with SurgeSynthEditor)
+    SurgeJUCELookAndFeel *surgeLF_{nullptr};
 
     // Measure operations
     void doubleMeasures();
