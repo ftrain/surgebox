@@ -80,7 +80,7 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     bool draggingDivider_{false};
 
     // Layout: Surge → Command bar → Piano Roll
-    static constexpr int COMMAND_BAR_HEIGHT = 40;
+    static constexpr int COMMAND_BAR_HEIGHT = 44;
     static constexpr int DIVIDER_HEIGHT = 6;
     static constexpr int MIN_PIANO_ROLL_HEIGHT = 150;
     static constexpr int MIN_SYNTH_HEIGHT = 200;

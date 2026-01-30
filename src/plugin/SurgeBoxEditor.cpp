@@ -231,28 +231,30 @@ void SurgeBoxEditor::resized()
     // 2. Command bar above piano roll
     auto commandBar = bounds.removeFromBottom(COMMAND_BAR_HEIGHT);
 
-    // Command bar layout
-    voiceSelector_->setBounds(commandBar.removeFromLeft(180).reduced(4));
-    transport_->setBounds(commandBar.removeFromLeft(140).reduced(4));
-    stepRecordButton_->setBounds(commandBar.removeFromLeft(50).reduced(4));
+    // Command bar layout - use fixed heights, minimal reduction
+    int pad = 2;
 
-    // Measure controls - wider buttons to show labels
-    commandBar.removeFromLeft(8); // spacing
-    measuresHalfBtn_->setBounds(commandBar.removeFromLeft(30).reduced(1));
-    measuresSubBtn_->setBounds(commandBar.removeFromLeft(30).reduced(1));
-    measuresLabel_->setBounds(commandBar.removeFromLeft(50).reduced(1));
-    measuresAddBtn_->setBounds(commandBar.removeFromLeft(30).reduced(1));
-    measuresDoubleBtn_->setBounds(commandBar.removeFromLeft(30).reduced(1));
+    voiceSelector_->setBounds(commandBar.removeFromLeft(160).reduced(pad, pad));
+    transport_->setBounds(commandBar.removeFromLeft(120).reduced(pad, pad));
+    stepRecordButton_->setBounds(commandBar.removeFromLeft(60).reduced(pad, pad));
+
+    // Measure controls
+    commandBar.removeFromLeft(10);
+    measuresHalfBtn_->setBounds(commandBar.removeFromLeft(36).reduced(pad, pad));
+    measuresSubBtn_->setBounds(commandBar.removeFromLeft(36).reduced(pad, pad));
+    measuresLabel_->setBounds(commandBar.removeFromLeft(60).reduced(pad, pad));
+    measuresAddBtn_->setBounds(commandBar.removeFromLeft(36).reduced(pad, pad));
+    measuresDoubleBtn_->setBounds(commandBar.removeFromLeft(36).reduced(pad, pad));
 
     // Grid size
     commandBar.removeFromLeft(10);
-    gridSizeLabel_->setBounds(commandBar.removeFromLeft(35).reduced(4));
-    gridSizeCombo_->setBounds(commandBar.removeFromLeft(55).reduced(4));
+    gridSizeLabel_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
+    gridSizeCombo_->setBounds(commandBar.removeFromLeft(70).reduced(pad, pad));
 
     // Tempo control
     commandBar.removeFromLeft(10);
-    tempoLabel_->setBounds(commandBar.removeFromLeft(35).reduced(4));
-    tempoSlider_->setBounds(commandBar.removeFromLeft(120).reduced(2));
+    tempoLabel_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
+    tempoSlider_->setBounds(commandBar.removeFromLeft(140).reduced(pad, pad));
 
     // 3. Surge viewport fills the rest (top)
     surgeViewport_->setBounds(bounds);
