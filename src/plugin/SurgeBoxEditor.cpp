@@ -8,11 +8,13 @@
 
 #include "SurgeBoxEditor.h"
 #include "SurgeSynthEditor.h"
-#include "SurgeJUCELookAndFeel.h"
 
 SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor &p)
     : AudioProcessorEditor(&p), processor_(p), engine_(p.getEngine())
 {
+    // Apply our dark look-and-feel
+    setLookAndFeel(&lookAndFeel_);
+
     // Set up callbacks
     engine_.onVoiceChanged = [this](int v) { onVoiceChanged(v); };
 
@@ -136,21 +138,8 @@ SurgeBoxEditor::~SurgeBoxEditor()
     stopTimer();
     engine_.onVoiceChanged = nullptr;
 
-    // Clear look-and-feel from all components before destruction
+    // Clear look-and-feel before destruction
     setLookAndFeel(nullptr);
-    stepRecordButton_->setLookAndFeel(nullptr);
-    measuresDoubleBtn_->setLookAndFeel(nullptr);
-    measuresHalfBtn_->setLookAndFeel(nullptr);
-    measuresAddBtn_->setLookAndFeel(nullptr);
-    measuresSubBtn_->setLookAndFeel(nullptr);
-    measuresLabel_->setLookAndFeel(nullptr);
-    gridSizeLabel_->setLookAndFeel(nullptr);
-    gridSizeCombo_->setLookAndFeel(nullptr);
-    tempoLabel_->setLookAndFeel(nullptr);
-    tempoSlider_->setLookAndFeel(nullptr);
-    voiceSelector_->setLookAndFeel(nullptr);
-    transport_->setLookAndFeel(nullptr);
-    pianoRollViewport_->setLookAndFeel(nullptr);
 
     // Remove keyboard listener from all processors
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
@@ -580,11 +569,6 @@ void SurgeBoxEditor::rebuildSurgeEditor()
             {
                 surgeSynthEditor->drawExtendedControls = false;
                 surgeSynthEditor->resized();
-
-                // Get Surge's look-and-feel and apply to our widgets
-                surgeLF_ = surgeSynthEditor->getSurgeLookAndFeel();
-                if (surgeLF_)
-                    applySurgeLookAndFeel();
             }
 
             surgeEditorWrapper_ = std::make_unique<juce::Component>();
@@ -596,28 +580,6 @@ void SurgeBoxEditor::rebuildSurgeEditor()
             updateSurgeEditorScale();
         }
     }
-}
-
-void SurgeBoxEditor::applySurgeLookAndFeel()
-{
-    if (!surgeLF_)
-        return;
-
-    // Apply Surge's look-and-feel to all our widgets
-    setLookAndFeel(surgeLF_);
-    stepRecordButton_->setLookAndFeel(surgeLF_);
-    measuresDoubleBtn_->setLookAndFeel(surgeLF_);
-    measuresHalfBtn_->setLookAndFeel(surgeLF_);
-    measuresAddBtn_->setLookAndFeel(surgeLF_);
-    measuresSubBtn_->setLookAndFeel(surgeLF_);
-    measuresLabel_->setLookAndFeel(surgeLF_);
-    gridSizeLabel_->setLookAndFeel(surgeLF_);
-    gridSizeCombo_->setLookAndFeel(surgeLF_);
-    tempoLabel_->setLookAndFeel(surgeLF_);
-    tempoSlider_->setLookAndFeel(surgeLF_);
-    voiceSelector_->setLookAndFeel(surgeLF_);
-    transport_->setLookAndFeel(surgeLF_);
-    pianoRollViewport_->setLookAndFeel(surgeLF_);
 }
 
 void SurgeBoxEditor::updateSurgeEditorScale()
