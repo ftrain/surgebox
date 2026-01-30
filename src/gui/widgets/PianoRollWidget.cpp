@@ -523,16 +523,22 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent &e)
 
     int clickedIndex = patternModel_->findNoteContaining(quantizedBeat, pitch, 0.05);
 
-    // Right-click or shift-click to delete
-    if (e.mods.isRightButtonDown() || e.mods.isShiftDown())
+    // Right-click to delete/erase mode
+    if (e.mods.isRightButtonDown())
     {
+        patternModel_->beginTransaction("Erase Notes");
+
         if (clickedIndex >= 0)
         {
-            patternModel_->beginTransaction("Delete Note");
             patternModel_->removeNote(clickedIndex);
             selectedNotes_.erase(clickedIndex);
-            repaint();
         }
+
+        // Enter erasing mode for drag-to-erase
+        dragMode_ = DragMode::Erasing;
+        lastDrawnBeat_ = quantizedBeat;
+        lastDrawnPitch_ = pitch;
+        repaint();
         return;
     }
 
@@ -564,10 +570,10 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent &e)
     }
     else
     {
-        // Clicked on empty space - add note at grid size (no drag resize)
+        // Clicked on empty space - add note and enter drawing mode
         selectedNotes_.clear();
 
-        patternModel_->beginTransaction("Add Note");
+        patternModel_->beginTransaction("Draw Notes");
 
         // Remove any overlapping notes first
         removeOverlappingNotes(pitch, quantizedBeat, quantizedBeat + gridSize_);
@@ -580,8 +586,10 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent &e)
             selectedNotes_.insert(newIndex);
         }
 
-        // Don't set drag mode - note stays at grid size
-        dragMode_ = DragMode::None;
+        // Enter drawing mode for drag-to-draw
+        dragMode_ = DragMode::Drawing;
+        lastDrawnBeat_ = quantizedBeat;
+        lastDrawnPitch_ = pitch;
         draggingNoteIndex_ = -1;
     }
     repaint();
@@ -618,11 +626,53 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent &e)
         return;
     }
 
-    if (draggingNoteIndex_ < 0 || dragMode_ == DragMode::None)
-        return;
-
     auto [beat, pitch] = screenToNote(e.getPosition(), gridArea);
     double quantizedBeat = std::floor(beat / gridSize_) * gridSize_;
+
+    // Handle drawing mode - add notes while dragging
+    if (dragMode_ == DragMode::Drawing)
+    {
+        // Only add note if position changed
+        if (quantizedBeat != lastDrawnBeat_ || pitch != lastDrawnPitch_)
+        {
+            // Check pattern bounds
+            if (quantizedBeat >= 0 && quantizedBeat < patternModel_->lengthInBeats())
+            {
+                // Remove any overlapping notes first
+                removeOverlappingNotes(pitch, quantizedBeat, quantizedBeat + gridSize_);
+
+                patternModel_->addNote(quantizedBeat, gridSize_, pitch, 100);
+
+                lastDrawnBeat_ = quantizedBeat;
+                lastDrawnPitch_ = pitch;
+                repaint();
+            }
+        }
+        return;
+    }
+
+    // Handle erasing mode - delete notes while dragging
+    if (dragMode_ == DragMode::Erasing)
+    {
+        // Only check if position changed
+        if (quantizedBeat != lastDrawnBeat_ || pitch != lastDrawnPitch_)
+        {
+            int noteIndex = patternModel_->findNoteContaining(quantizedBeat, pitch, 0.05);
+            if (noteIndex >= 0)
+            {
+                patternModel_->removeNote(noteIndex);
+                selectedNotes_.erase(noteIndex);
+                repaint();
+            }
+
+            lastDrawnBeat_ = quantizedBeat;
+            lastDrawnPitch_ = pitch;
+        }
+        return;
+    }
+
+    if (draggingNoteIndex_ < 0 || dragMode_ == DragMode::None)
+        return;
 
     if (dragMode_ == DragMode::Move)
     {

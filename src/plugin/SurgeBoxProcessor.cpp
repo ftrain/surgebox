@@ -27,15 +27,16 @@ SurgeBoxProcessor::~SurgeBoxProcessor()
     // Shutdown engine first - this clears all callbacks and synth pointers
     engine_.shutdown();
 
-    // Release Surge processors - do this explicitly before member destruction
-    // to ensure proper ordering
-    for (auto &proc : surgeProcessors_)
+    // Release Surge processors in REVERSE order to avoid issues with shared
+    // global state. Surge uses shared lookandfeels and other resources that
+    // may have dependencies on the first-created instance.
+    for (int i = SurgeBox::NUM_VOICES - 1; i >= 0; i--)
     {
-        if (proc)
+        if (surgeProcessors_[i])
         {
-            // Don't call releaseResources here - it may have already been called
-            // and could cause issues. Just reset the unique_ptr.
-            proc.reset();
+            // Call releaseResources to ensure proper cleanup of audio resources
+            surgeProcessors_[i]->releaseResources();
+            surgeProcessors_[i].reset();
         }
     }
 }

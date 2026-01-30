@@ -63,6 +63,9 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     std::unique_ptr<juce::ComboBox> gridSizeCombo_;
     std::unique_ptr<juce::Label> gridSizeLabel_;
 
+    // Clear pattern button
+    std::unique_ptr<juce::TextButton> clearPatternBtn_;
+
     // Tempo control
     std::unique_ptr<juce::Slider> tempoSlider_;
     std::unique_ptr<juce::Label> tempoLabel_;
@@ -98,6 +101,7 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     void halveMeasures();
     void addMeasure();
     void subtractMeasure();
+    void clearPattern();
 
     // Mouse handling for divider
     void mouseDown(const juce::MouseEvent &e) override;

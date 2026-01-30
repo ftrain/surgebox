@@ -67,18 +67,60 @@ class SurgeBoxLookAndFeel : public juce::LookAndFeel_V4
                               bool shouldDrawButtonAsDown) override
     {
         auto bounds = button.getLocalBounds().toFloat().reduced(0.5f);
-        auto baseColour = backgroundColour;
+        auto corner = 2.0f;
 
-        if (shouldDrawButtonAsDown)
-            baseColour = baseColour.darker(0.2f);
+        // Surge-style button drawing
+        auto bgColor = juce::Colour(0xff2a3a4a);
+        auto borderColor = juce::Colour(0xff4a5a6a);
+        auto textBg = juce::Colour(0xff1a2a3a);
+
+        bool isOn = button.getToggleState();
+
+        if (isOn)
+        {
+            bgColor = juce::Colour(0xff00a0c0);
+            borderColor = juce::Colour(0xff00c0e0);
+            textBg = juce::Colour(0xff0080a0);
+        }
+        else if (shouldDrawButtonAsDown)
+        {
+            bgColor = bgColor.darker(0.3f);
+            textBg = textBg.darker(0.3f);
+        }
         else if (shouldDrawButtonAsHighlighted)
-            baseColour = baseColour.brighter(0.1f);
+        {
+            bgColor = bgColor.brighter(0.1f);
+            borderColor = borderColor.brighter(0.2f);
+        }
 
-        g.setColour(baseColour);
-        g.fillRoundedRectangle(bounds, 4.0f);
+        // Draw background
+        g.setColour(bgColor);
+        g.fillRoundedRectangle(bounds, corner);
 
-        g.setColour(baseColour.brighter(0.2f));
-        g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
+        // Draw inner area (slightly darker)
+        auto innerBounds = bounds.reduced(1.0f);
+        g.setColour(textBg);
+        g.fillRoundedRectangle(innerBounds, corner - 0.5f);
+
+        // Draw border
+        g.setColour(borderColor);
+        g.drawRoundedRectangle(bounds, corner, 1.0f);
+    }
+
+    void drawButtonText(juce::Graphics &g, juce::TextButton &button,
+                        bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
+    {
+        auto font = juce::Font(juce::FontOptions().withHeight(12.0f));
+        g.setFont(font);
+
+        auto textColor = button.getToggleState() ? juce::Colours::white : juce::Colour(0xffa0b0c0);
+        if (shouldDrawButtonAsHighlighted && !button.getToggleState())
+            textColor = juce::Colours::white;
+
+        g.setColour(textColor);
+
+        auto bounds = button.getLocalBounds();
+        g.drawText(button.getButtonText(), bounds, juce::Justification::centred, false);
     }
 
     void drawComboBox(juce::Graphics &g, int width, int height, bool isButtonDown,
@@ -86,21 +128,29 @@ class SurgeBoxLookAndFeel : public juce::LookAndFeel_V4
                       juce::ComboBox &box) override
     {
         auto bounds = juce::Rectangle<int>(0, 0, width, height).toFloat().reduced(0.5f);
+        auto corner = 2.0f;
 
-        g.setColour(box.findColour(juce::ComboBox::backgroundColourId));
-        g.fillRoundedRectangle(bounds, 4.0f);
+        // Surge-style combo box
+        auto bgColor = juce::Colour(0xff1a2a3a);
+        auto borderColor = juce::Colour(0xff4a5a6a);
 
-        g.setColour(box.findColour(juce::ComboBox::outlineColourId));
-        g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
+        if (isButtonDown)
+            bgColor = bgColor.darker(0.2f);
+
+        g.setColour(bgColor);
+        g.fillRoundedRectangle(bounds, corner);
+
+        g.setColour(borderColor);
+        g.drawRoundedRectangle(bounds, corner, 1.0f);
 
         // Draw arrow
         juce::Path arrow;
-        auto arrowX = width - 20.0f;
+        auto arrowX = width - 15.0f;
         auto arrowY = height * 0.5f;
-        arrow.addTriangle(arrowX, arrowY - 3.0f,
-                          arrowX + 6.0f, arrowY - 3.0f,
-                          arrowX + 3.0f, arrowY + 3.0f);
-        g.setColour(box.findColour(juce::ComboBox::arrowColourId));
+        arrow.addTriangle(arrowX - 3.0f, arrowY - 2.0f,
+                          arrowX + 3.0f, arrowY - 2.0f,
+                          arrowX, arrowY + 2.0f);
+        g.setColour(juce::Colour(0xff8090a0));
         g.fillPath(arrow);
     }
 
@@ -108,35 +158,39 @@ class SurgeBoxLookAndFeel : public juce::LookAndFeel_V4
                           float sliderPos, float minSliderPos, float maxSliderPos,
                           const juce::Slider::SliderStyle style, juce::Slider &slider) override
     {
-        auto trackWidth = 4.0f;
-
-        juce::Point<float> startPoint(slider.isHorizontal() ? x : x + width * 0.5f,
-                                      slider.isHorizontal() ? y + height * 0.5f : height + y);
-        juce::Point<float> endPoint(slider.isHorizontal() ? width + x : startPoint.x,
-                                    slider.isHorizontal() ? startPoint.y : y);
+        // Surge-style slider
+        auto trackHeight = 4.0f;
+        auto bounds = juce::Rectangle<float>(x, y + height * 0.5f - trackHeight * 0.5f,
+                                              width, trackHeight);
 
         // Track background
-        juce::Path backgroundTrack;
-        backgroundTrack.startNewSubPath(startPoint);
-        backgroundTrack.lineTo(endPoint);
-        g.setColour(slider.findColour(juce::Slider::backgroundColourId));
-        g.strokePath(backgroundTrack, {trackWidth, juce::PathStrokeType::curved,
-                                       juce::PathStrokeType::rounded});
+        g.setColour(juce::Colour(0xff1a2a3a));
+        g.fillRoundedRectangle(bounds, 2.0f);
 
-        // Active track
-        juce::Path valueTrack;
-        juce::Point<float> thumbPoint(slider.isHorizontal() ? sliderPos : startPoint.x,
-                                      slider.isHorizontal() ? startPoint.y : sliderPos);
-        valueTrack.startNewSubPath(startPoint);
-        valueTrack.lineTo(thumbPoint);
-        g.setColour(slider.findColour(juce::Slider::trackColourId));
-        g.strokePath(valueTrack, {trackWidth, juce::PathStrokeType::curved,
-                                  juce::PathStrokeType::rounded});
+        // Track border
+        g.setColour(juce::Colour(0xff3a4a5a));
+        g.drawRoundedRectangle(bounds, 2.0f, 1.0f);
+
+        // Value fill
+        auto fillWidth = sliderPos - x;
+        if (fillWidth > 0)
+        {
+            auto fillBounds = bounds.withWidth(fillWidth);
+            g.setColour(juce::Colour(0xff00a0c0));
+            g.fillRoundedRectangle(fillBounds, 2.0f);
+        }
 
         // Thumb
-        auto thumbWidth = 14.0f;
-        g.setColour(slider.findColour(juce::Slider::thumbColourId));
-        g.fillEllipse(juce::Rectangle<float>(thumbWidth, thumbWidth).withCentre(thumbPoint));
+        auto thumbWidth = 10.0f;
+        auto thumbHeight = 16.0f;
+        auto thumbX = sliderPos - thumbWidth * 0.5f;
+        auto thumbY = y + height * 0.5f - thumbHeight * 0.5f;
+        auto thumbBounds = juce::Rectangle<float>(thumbX, thumbY, thumbWidth, thumbHeight);
+
+        g.setColour(juce::Colour(0xff4a6a8a));
+        g.fillRoundedRectangle(thumbBounds, 2.0f);
+        g.setColour(juce::Colour(0xff6a8aaa));
+        g.drawRoundedRectangle(thumbBounds, 2.0f, 1.0f);
     }
 
   private:

@@ -76,6 +76,12 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor &p)
     gridSizeCombo_->addListener(this);
     addAndMakeVisible(*gridSizeCombo_);
 
+    // Clear pattern button
+    clearPatternBtn_ = std::make_unique<juce::TextButton>("CLR");
+    clearPatternBtn_->addListener(this);
+    clearPatternBtn_->setTooltip("Clear pattern");
+    addAndMakeVisible(*clearPatternBtn_);
+
     // Tempo control
     tempoLabel_ = std::make_unique<juce::Label>("", "BPM:");
     tempoLabel_->setColour(juce::Label::textColourId, juce::Colours::white);
@@ -191,12 +197,21 @@ void SurgeBoxEditor::paint(juce::Graphics &g)
 {
     g.fillAll(juce::Colour(0xff1a1a2e));
 
-    // Command bar background
+    // Command bar background - use Surge-like gradient
     auto commandBarBounds = getCommandBarBounds();
-    g.setColour(juce::Colour(0xff16213e));
+    g.setGradientFill(juce::ColourGradient(
+        juce::Colour(0xff1e2a3a), commandBarBounds.getX(), commandBarBounds.getY(),
+        juce::Colour(0xff16213e), commandBarBounds.getX(), commandBarBounds.getBottom(),
+        false));
     g.fillRect(commandBarBounds);
 
-    // Divider bar
+    // Command bar top/bottom lines (Surge style)
+    g.setColour(juce::Colour(0xff3a4a5a));
+    g.drawHorizontalLine(commandBarBounds.getY(), 0, getWidth());
+    g.setColour(juce::Colour(0xff0a1020));
+    g.drawHorizontalLine(commandBarBounds.getBottom() - 1, 0, getWidth());
+
+    // Divider bar (now above command bar)
     auto dividerBounds = getDividerBounds();
     g.setColour(juce::Colour(0xff0f3460));
     g.fillRect(dividerBounds);
@@ -210,9 +225,9 @@ void SurgeBoxEditor::paint(juce::Graphics &g)
 
 juce::Rectangle<int> SurgeBoxEditor::getCommandBarBounds() const
 {
-    // Command bar is between surge editor and piano roll
-    int surgeBottom = getHeight() - pianoRollHeight_ - DIVIDER_HEIGHT - COMMAND_BAR_HEIGHT;
-    return juce::Rectangle<int>(0, surgeBottom, getWidth(), COMMAND_BAR_HEIGHT);
+    // Command bar is directly above piano roll
+    int commandBarTop = getHeight() - pianoRollHeight_ - COMMAND_BAR_HEIGHT;
+    return juce::Rectangle<int>(0, commandBarTop, getWidth(), COMMAND_BAR_HEIGHT);
 }
 
 void SurgeBoxEditor::resized()
@@ -220,16 +235,17 @@ void SurgeBoxEditor::resized()
     auto bounds = getLocalBounds();
 
     // Layout from bottom up:
-    // 1. Piano roll at bottom (user-resizable)
+    // 1. Piano roll at bottom
+    // 2. Command bar above piano roll
+    // 3. Divider above command bar (user-resizable)
+    // 4. Surge editor at top
     pianoRollHeight_ = std::clamp(pianoRollHeight_, MIN_PIANO_ROLL_HEIGHT,
                                    bounds.getHeight() - MIN_SYNTH_HEIGHT - DIVIDER_HEIGHT - COMMAND_BAR_HEIGHT);
 
     auto pianoRollArea = bounds.removeFromBottom(pianoRollHeight_);
+    auto commandBar = bounds.removeFromBottom(COMMAND_BAR_HEIGHT);
     auto dividerArea = bounds.removeFromBottom(DIVIDER_HEIGHT);
     (void)dividerArea;
-
-    // 2. Command bar above piano roll
-    auto commandBar = bounds.removeFromBottom(COMMAND_BAR_HEIGHT);
 
     // Command bar layout - use fixed heights, minimal reduction
     int pad = 2;
@@ -256,6 +272,10 @@ void SurgeBoxEditor::resized()
     tempoLabel_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
     tempoSlider_->setBounds(commandBar.removeFromLeft(140).reduced(pad, pad));
 
+    // Clear button
+    commandBar.removeFromLeft(10);
+    clearPatternBtn_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
+
     // 3. Surge viewport fills the rest (top)
     surgeViewport_->setBounds(bounds);
 
@@ -264,10 +284,10 @@ void SurgeBoxEditor::resized()
 
     auto *model = engine_.getActivePatternModel();
     int bars = model ? model->getBars() : 1;
-    int numOctaves = 5;
-    int noteWidth = 20;
+    int numNotes = 87;  // 88 piano keys (A0 to C8)
+    int noteWidth = 18;
     double pixelsPerBeat = pianoRoll_->getPixelsPerBeat();
-    int pianoRollInternalWidth = std::max(pianoRollArea.getWidth(), numOctaves * 12 * noteWidth);
+    int pianoRollInternalWidth = numNotes * noteWidth;
     // Height based on pattern length plus piano key area (30px)
     int pianoRollInternalHeight = static_cast<int>(bars * 4 * pixelsPerBeat) + 30 + 10;
     pianoRoll_->setSize(pianoRollInternalWidth, pianoRollInternalHeight);
@@ -311,6 +331,10 @@ void SurgeBoxEditor::buttonClicked(juce::Button *button)
     else if (button == measuresSubBtn_.get())
     {
         subtractMeasure();
+    }
+    else if (button == clearPatternBtn_.get())
+    {
+        clearPattern();
     }
 }
 
@@ -466,6 +490,21 @@ void SurgeBoxEditor::subtractMeasure()
     resized();
 }
 
+void SurgeBoxEditor::clearPattern()
+{
+    auto *model = engine_.getActivePatternModel();
+    if (!model)
+        return;
+
+    model->beginTransaction("Clear Pattern");
+    model->clear();
+
+    if (pianoRoll_)
+        pianoRoll_->clearSelection();
+
+    repaint();
+}
+
 bool SurgeBoxEditor::keyPressed(const juce::KeyPress &key)
 {
     auto &undoManager = engine_.getUndoManager();
@@ -504,7 +543,8 @@ bool SurgeBoxEditor::keyPressed(const juce::KeyPress &key)
 
 juce::Rectangle<int> SurgeBoxEditor::getDividerBounds() const
 {
-    int dividerY = getHeight() - pianoRollHeight_ - DIVIDER_HEIGHT;
+    // Divider is above command bar (between surge editor and command bar)
+    int dividerY = getHeight() - pianoRollHeight_ - COMMAND_BAR_HEIGHT - DIVIDER_HEIGHT;
     return juce::Rectangle<int>(0, dividerY, getWidth(), DIVIDER_HEIGHT);
 }
 
@@ -520,9 +560,10 @@ void SurgeBoxEditor::mouseDrag(const juce::MouseEvent &e)
 {
     if (draggingDivider_)
     {
-        int newPianoRollHeight = getHeight() - e.y - DIVIDER_HEIGHT / 2;
+        // Divider is above command bar, so calculate piano roll height accordingly
+        int newPianoRollHeight = getHeight() - e.y - DIVIDER_HEIGHT / 2 - COMMAND_BAR_HEIGHT;
         pianoRollHeight_ = std::clamp(newPianoRollHeight, MIN_PIANO_ROLL_HEIGHT,
-                                       getHeight() - COMMAND_BAR_HEIGHT - MIN_SYNTH_HEIGHT - DIVIDER_HEIGHT);
+                                       getHeight() - MIN_SYNTH_HEIGHT - DIVIDER_HEIGHT - COMMAND_BAR_HEIGHT);
         resized();
         repaint();
     }

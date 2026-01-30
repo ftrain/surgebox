@@ -64,9 +64,9 @@ class PianoRollWidget : public juce::Component
 
   private:
     // Grid settings - vertical orientation
-    int lowestNote_{36};    // C2
-    int highestNote_{96};   // C7 (5 octaves)
-    int noteWidth_{20};     // Width per pitch column
+    int lowestNote_{21};    // A0 (lowest piano key)
+    int highestNote_{108};  // C8 (highest piano key) - 88 keys like a piano
+    int noteWidth_{18};     // Width per pitch column (slightly narrower for more notes)
     double pixelsPerBeat_{60.0};  // Default to zoomed in view
     double gridSize_{0.25};
 
@@ -93,8 +93,14 @@ class PianoRollWidget : public juce::Component
         Move,
         ResizeEnd,
         BoxSelect,
-        PlayingPiano
+        PlayingPiano,
+        Drawing,
+        Erasing
     } dragMode_{DragMode::None};
+
+    // Track last drawn/erased position to avoid duplicates
+    double lastDrawnBeat_{-1.0};
+    int lastDrawnPitch_{-1};
 
     int playingNote_{-1};
 
