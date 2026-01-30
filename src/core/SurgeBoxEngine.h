@@ -9,13 +9,23 @@
 #pragma once
 
 #include "GrooveboxProject.h"
+#include "PatternModel.h"
+#include "SurgeSynthesizer.h"
+#include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_data_structures/juce_data_structures.h>
 #include <array>
 #include <memory>
 #include <atomic>
 #include <functional>
 
-class SurgeSynthesizer;
-class SurgeStorage;
+// Forward declarations
+class SurgeSynthProcessor;
+
+namespace juce
+{
+template <typename T>
+class AudioBuffer;
+} // namespace juce
 
 namespace SurgeBox
 {
@@ -43,12 +53,20 @@ class SequencerEngine
 
     double getLoopEndBeat() const;
 
-    // Called from audio thread
-    void process(int numSamples, double sampleRate);
+    // Get currently playing notes for a voice (for UI highlighting)
+    std::vector<uint8_t> getPlayingNotes(int voiceIndex) const;
+
+    // Called from audio thread - populates midiBuffers for each voice
+    void process(int numSamples, double sampleRate,
+                 std::array<juce::MidiBuffer *, NUM_VOICES> midiBuffers);
 
   private:
-    void triggerNotesInRange(double startBeat, double endBeat);
-    void releaseNotesEndingInRange(double startBeat, double endBeat);
+    void triggerNotesInRange(double startBeat, double endBeat, int numSamples,
+                             std::array<juce::MidiBuffer *, NUM_VOICES> midiBuffers,
+                             int baseSampleOffset = 0);
+    void releaseNotesEndingInRange(double startBeat, double endBeat, int numSamples,
+                                   std::array<juce::MidiBuffer *, NUM_VOICES> midiBuffers,
+                                   int baseSampleOffset = 0);
 
     GrooveboxProject *project_{nullptr};
     std::array<SurgeSynthesizer *, NUM_VOICES> synths_{};
@@ -56,6 +74,9 @@ class SequencerEngine
     std::atomic<bool> playing_{false};
     std::atomic<double> currentBeat_{0.0};
     double sampleRate_{44100.0};
+    double beatsPerSample_{0.0};
+    double blockStartBeat_{0.0};
+    int numSamplesInBlock_{0};
 
     struct ActiveNote
     {
@@ -68,6 +89,7 @@ class SequencerEngine
 
 // ============================================================================
 // SurgeBox Engine - Multi-instance manager
+// Uses SurgeSynthProcessor to properly handle GUI keyboard input
 // ============================================================================
 
 class SurgeBoxEngine
@@ -76,7 +98,8 @@ class SurgeBoxEngine
     SurgeBoxEngine();
     ~SurgeBoxEngine();
 
-    // Initialization
+    // Initialization - processors are injected from plugin layer
+    void setProcessors(std::array<SurgeSynthProcessor *, NUM_VOICES> processors);
     bool initialize(double sampleRate, int blockSize);
     void shutdown();
 
@@ -87,12 +110,22 @@ class SurgeBoxEngine
     int getActiveVoice() const { return activeVoice_; }
     void setActiveVoice(int voice);
 
+    // Access to synths (via processors)
     SurgeSynthesizer *getSynth(int voice);
     SurgeSynthesizer *getActiveSynth() { return getSynth(activeVoice_); }
 
     // Project
     GrooveboxProject &getProject() { return project_; }
     const GrooveboxProject &getProject() const { return project_; }
+
+    // Pattern models (with undo support)
+    PatternModel *getPatternModel(int voice);
+    PatternModel *getActivePatternModel() { return getPatternModel(activeVoice_); }
+    juce::UndoManager &getUndoManager() { return undoManager_; }
+
+    // Sync pattern models to/from project (for save/load)
+    void syncPatternModelsFromProject();
+    void syncPatternModelsToProject();
 
     // Transport
     SequencerEngine &getSequencer() { return sequencer_; }
@@ -102,6 +135,10 @@ class SurgeBoxEngine
     void stop() { sequencer_.stop(); }
     bool isPlaying() const { return sequencer_.isPlaying(); }
     double getPlayheadBeats() const { return sequencer_.getPositionBeats(); }
+
+    // Get currently playing notes for UI highlighting
+    std::vector<uint8_t> getPlayingNotes(int voice) const { return sequencer_.getPlayingNotes(voice); }
+    std::vector<uint8_t> getActivePlayingNotes() const { return getPlayingNotes(activeVoice_); }
 
     // Capture current state of all synths into project
     void captureAllVoices();
@@ -119,20 +156,31 @@ class SurgeBoxEngine
   private:
     void mixVoices(float *outputL, float *outputR, int numSamples);
 
-    std::array<std::unique_ptr<SurgeSynthesizer>, NUM_VOICES> synths_;
-    std::shared_ptr<SurgeStorage> sharedStorage_;
+    // Processors are owned by plugin, we hold pointers
+    std::array<SurgeSynthProcessor *, NUM_VOICES> processors_{};
 
     GrooveboxProject project_;
     SequencerEngine sequencer_;
+    juce::UndoManager undoManager_;
+    std::array<std::unique_ptr<PatternModel>, NUM_VOICES> patternModels_;
 
     int activeVoice_{0};
     double sampleRate_{44100.0};
     int blockSize_{32};
     bool initialized_{false};
 
-    // Mixing buffers
+    // Mixing buffers - used to call processBlock on each processor
     alignas(16) float mixBufferL_[4096];
     alignas(16) float mixBufferR_[4096];
+
+    // Pre-allocated buffer for voice processing (avoid allocations in audio thread)
+    std::unique_ptr<juce::AudioBuffer<float>> voiceBuffer_;
+
+    // Pre-allocated MIDI buffers for each voice (avoid allocations in audio thread)
+    std::array<juce::MidiBuffer, NUM_VOICES> voiceMidiBuffers_;
+
+    // Block start position for syncing Surge's internal time
+    double blockStartBeat_{0.0};
 };
 
 } // namespace SurgeBox

@@ -23,15 +23,16 @@ endif()
 
 set(SURGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libs/surge)
 
-# Skip building Surge's plugins - we just need the common library
+# Build surge-xt to get access to the GUI components
 set(SURGE_BUILD_TESTRUNNER OFF CACHE BOOL "" FORCE)
 set(SURGE_BUILD_FX OFF CACHE BOOL "" FORCE)
-set(SURGE_BUILD_XT OFF CACHE BOOL "" FORCE)
+set(SURGE_BUILD_XT ON CACHE BOOL "" FORCE)  # Enable to get GUI
 set(SURGE_BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
 set(SURGE_COPY_AFTER_BUILD OFF CACHE BOOL "" FORCE)
 set(SURGE_BUILD_CLAP OFF CACHE BOOL "" FORCE)
 set(SURGE_SKIP_JUCE_FOR_RACK OFF CACHE BOOL "" FORCE)
 set(CMAKE_CROSSCOMPILING TRUE CACHE BOOL "" FORCE) # Skip pluginval
+set(SURGE_JUCE_FORMATS "Standalone" CACHE STRING "" FORCE) # Only build standalone for surge-xt
 
 # Add Surge - it will only build surge-common due to our options
 add_subdirectory(libs/surge)
@@ -43,6 +44,8 @@ add_subdirectory(libs/surge)
 add_library(surgebox-core STATIC
     src/core/GrooveboxProject.cpp
     src/core/GrooveboxProject.h
+    src/core/PatternModel.cpp
+    src/core/PatternModel.h
     src/core/SurgeBoxEngine.cpp
     src/core/SurgeBoxEngine.h
 )
@@ -51,6 +54,9 @@ target_include_directories(surgebox-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${SURGE_SOURCE_DIR}/src/common
+    ${SURGE_SOURCE_DIR}/src/surge-xt
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui
+    ${SURGE_SOURCE_DIR}/libs/sst/sst-jucegui/include
 )
 
 # Add r8brain manually since Surge's CMake uses CMAKE_SOURCE_DIR which doesn't work as subdir
@@ -61,8 +67,14 @@ target_include_directories(surgebox-core PRIVATE
     ${SURGE_SOURCE_DIR}/libs/r8brain-free-src
 )
 
+# NOTE: We don't link surge-xt here to avoid duplicate createPluginFilter symbol
+# The final plugin will link it. surgebox-core uses forward declarations.
+# We do need JUCE audio basics for AudioBuffer in the engine
 target_link_libraries(surgebox-core PUBLIC
     surge::surge-common
+    juce::juce_audio_basics
+    juce::juce_audio_processors
+    juce::juce_data_structures
 )
 
 # ============================================================================
@@ -107,6 +119,7 @@ target_include_directories(surgebox PRIVATE
     ${SURGE_SOURCE_DIR}/src/common
     ${SURGE_SOURCE_DIR}/src/surge-xt/gui
     ${SURGE_SOURCE_DIR}/src/surge-xt
+    ${SURGE_SOURCE_DIR}/libs/sst/sst-jucegui/include
 )
 
 target_compile_definitions(surgebox PUBLIC
@@ -118,11 +131,86 @@ target_compile_definitions(surgebox PUBLIC
     JUCE_MODAL_LOOPS_PERMITTED=1
 )
 
+# Get the sources from surge-xt but not the plugin factory (createPluginFilter)
+# We compile the surge-xt sources directly to avoid duplicate symbol issues
+target_sources(surgebox PRIVATE
+    ${SURGE_SOURCE_DIR}/src/surge-xt/SurgeSynthProcessor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/SurgeSynthEditor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/SurgeCLAPPresetDiscovery.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/util/LuaTokeniserSurge.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/RuntimeFont.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SkinFontLoader.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SkinSupport.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIEditor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIEditorHtmlGenerators.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIEditorInfowindow.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIEditorOverlays.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIEditorValueCallbacks.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIEditorMenuStructures.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeGUIUtils.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeImage.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeImageStore.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/SurgeJUCELookAndFeel.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/UndoManager.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/AboutScreen.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/FilterAnalysis.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/KeyBindingsOverlay.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/LuaEditors.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/MSEGEditor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/MiniEdit.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/Alert.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/OverlayUtils.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/ModulationEditor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/Oscilloscope.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/OverlayWrapper.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/PatchDBViewer.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/PatchStoreDialog.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/TuningOverlays.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/TypeinParamEditor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/WaveShaperAnalysis.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/overlays/OpenSoundControlSettings.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/CurrentFxDisplay.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/EffectChooser.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/LFOAndStepDisplay.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/MainFrame.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/MenuButtonFromIcon.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/MenuCustomComponents.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/MenuForDiscreteParams.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/ModulatableSlider.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/ModulationSourceButton.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/MultiSwitch.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/NumberField.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/OscillatorWaveformDisplay.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/ParameterInfowindow.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/PatchSelector.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/Switch.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/SurgeTextButton.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/TypeAheadTextEditor.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/VerticalLabel.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/VuMeter.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/WaveShaperSelector.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/gui/widgets/XMLConfiguredMenus.cpp
+    ${SURGE_SOURCE_DIR}/src/surge-xt/osc/OpenSoundControl.cpp
+)
+
+# Rename Surge's createPluginFilter to avoid conflict with ours
+# We use preprocessor to rename it during compilation
+set_source_files_properties(
+    ${SURGE_SOURCE_DIR}/src/surge-xt/SurgeSynthProcessor.cpp
+    PROPERTIES COMPILE_DEFINITIONS "createPluginFilter=_surge_unused_createPluginFilter"
+)
+
 target_link_libraries(surgebox PRIVATE
     surgebox-core
     surge::surge-common
+    surge-platform
+    surge-juce
+    surge-xt-binary  # Binary resources
+    sst-filters-extras
     juce::juce_audio_utils
     juce::juce_audio_processors
+    juce::juce_osc
+    juce::juce_dsp
 )
 
 # ============================================================================

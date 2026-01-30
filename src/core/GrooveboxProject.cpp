@@ -119,9 +119,11 @@ std::vector<const MIDINote *> Pattern::getNotesStartingInRange(double startBeat,
                                                                 double endBeat) const
 {
     std::vector<const MIDINote *> result;
+    // Use small epsilon to avoid floating point edge cases at beat boundaries
+    constexpr double epsilon = 0.0001;
     for (const auto &note : notes)
     {
-        if (note.startBeat >= startBeat && note.startBeat < endBeat)
+        if (note.startBeat >= startBeat - epsilon && note.startBeat < endBeat)
             result.push_back(&note);
     }
     return result;

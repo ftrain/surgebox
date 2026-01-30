@@ -15,16 +15,62 @@ SurgeBoxProcessor::SurgeBoxProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)
                          .withInput("Input", juce::AudioChannelSet::stereo(), true))
 {
+    // Create the Surge processor instances
+    for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
+    {
+        surgeProcessors_[i] = std::make_unique<SurgeSynthProcessor>();
+    }
 }
 
-SurgeBoxProcessor::~SurgeBoxProcessor() { engine_.shutdown(); }
+SurgeBoxProcessor::~SurgeBoxProcessor()
+{
+    // Shutdown engine first - this clears all callbacks and synth pointers
+    engine_.shutdown();
+
+    // Release Surge processors - do this explicitly before member destruction
+    // to ensure proper ordering
+    for (auto &proc : surgeProcessors_)
+    {
+        if (proc)
+        {
+            // Don't call releaseResources here - it may have already been called
+            // and could cause issues. Just reset the unique_ptr.
+            proc.reset();
+        }
+    }
+}
 
 void SurgeBoxProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    // Prepare all Surge processors and pass them to engine
+    std::array<SurgeSynthProcessor *, SurgeBox::NUM_VOICES> procPtrs{};
+
+    for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
+    {
+        if (surgeProcessors_[i])
+        {
+            surgeProcessors_[i]->prepareToPlay(sampleRate, samplesPerBlock);
+            procPtrs[i] = surgeProcessors_[i].get();
+        }
+    }
+
+    // Pass processor pointers to engine (it will use processBlock to handle GUI keyboard)
+    engine_.setProcessors(procPtrs);
     engine_.initialize(sampleRate, samplesPerBlock);
 }
 
-void SurgeBoxProcessor::releaseResources() { engine_.shutdown(); }
+void SurgeBoxProcessor::releaseResources()
+{
+    // Shutdown engine (clears callbacks and synth pointers)
+    engine_.shutdown();
+
+    // Release resources on each processor
+    for (auto &proc : surgeProcessors_)
+    {
+        if (proc)
+            proc->releaseResources();
+    }
+}
 
 void SurgeBoxProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuffer &midiMessages)
 {
@@ -85,6 +131,13 @@ void SurgeBoxProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mid
 juce::AudioProcessorEditor *SurgeBoxProcessor::createEditor()
 {
     return new SurgeBoxEditor(*this);
+}
+
+SurgeSynthProcessor *SurgeBoxProcessor::getProcessor(int voice)
+{
+    if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
+        return nullptr;
+    return surgeProcessors_[voice].get();
 }
 
 void SurgeBoxProcessor::getStateInformation(juce::MemoryBlock &destData)

@@ -10,6 +10,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "core/SurgeBoxEngine.h"
+#include "SurgeSynthProcessor.h"
+#include <array>
+#include <memory>
 
 class SurgeBoxProcessor : public juce::AudioProcessor
 {
@@ -45,7 +48,14 @@ class SurgeBoxProcessor : public juce::AudioProcessor
     SurgeBox::SurgeBoxEngine &getEngine() { return engine_; }
     const SurgeBox::SurgeBoxEngine &getEngine() const { return engine_; }
 
+    // Access to individual Surge processors (for GUI)
+    SurgeSynthProcessor *getProcessor(int voice);
+
   private:
+    // We own the Surge processors (which each own a SurgeSynthesizer)
+    std::array<std::unique_ptr<SurgeSynthProcessor>, SurgeBox::NUM_VOICES> surgeProcessors_;
+
+    // Engine orchestrates the voices
     SurgeBox::SurgeBoxEngine engine_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SurgeBoxProcessor)
