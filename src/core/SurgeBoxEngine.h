@@ -136,6 +136,16 @@ class SurgeBoxEngine
     bool isPlaying() const { return sequencer_.isPlaying(); }
     double getPlayheadBeats() const { return sequencer_.getPositionBeats(); }
 
+    // Get playhead in voice-time (scaled by tempo multiplier) for active voice
+    double getActiveVoicePlayheadBeats() const {
+        double globalBeat = sequencer_.getPositionBeats();
+        double multiplier = project_.voices[activeVoice_].tempoMultiplier.load();
+        if (multiplier <= 0) multiplier = 1.0;
+        double patternLength = project_.voices[activeVoice_].pattern.bars * 4.0;
+        double voiceBeat = globalBeat * multiplier;
+        return std::fmod(voiceBeat, patternLength);
+    }
+
     // Get currently playing notes for UI highlighting
     std::vector<uint8_t> getPlayingNotes(int voice) const { return sequencer_.getPlayingNotes(voice); }
     std::vector<uint8_t> getActivePlayingNotes() const { return getPlayingNotes(activeVoice_); }

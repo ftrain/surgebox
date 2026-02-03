@@ -83,13 +83,17 @@ double SequencerEngine::getLoopEndBeat() const
     if (!project_)
         return 4.0;
 
-    // Loop length is the maximum of all pattern lengths
+    // Loop length must account for tempo multipliers
+    // Each voice needs (patternBeats / tempoMultiplier) global beats to complete
     double maxLength = 4.0;
     for (const auto &voice : project_->voices)
     {
         double patternLength = voice.pattern.bars * 4.0;
-        if (patternLength > maxLength)
-            maxLength = patternLength;
+        double multiplier = voice.tempoMultiplier.load();
+        if (multiplier <= 0) multiplier = 1.0;
+        double globalBeatsNeeded = patternLength / multiplier;
+        if (globalBeatsNeeded > maxLength)
+            maxLength = globalBeatsNeeded;
     }
     return maxLength;
 }
@@ -114,6 +118,7 @@ void SequencerEngine::process(int numSamples, double sampleRate,
     sampleRate_ = sampleRate;
     numSamplesInBlock_ = numSamples;
 
+    // Master clock runs at base tempo
     double beatsPerSecond = project_->tempo / 60.0;
     beatsPerSample_ = beatsPerSecond / sampleRate_;
     double beatsThisBlock = beatsPerSample_ * numSamples;
@@ -122,6 +127,27 @@ void SequencerEngine::process(int numSamples, double sampleRate,
     blockStartBeat_ = startBeat;
     double endBeat = startBeat + beatsThisBlock;
     double loopEnd = getLoopEndBeat();
+
+    // Check for bar boundaries and apply pending tempo changes
+    for (auto &voice : project_->voices)
+    {
+        double pending = voice.pendingTempoMultiplier.load();
+        double current = voice.tempoMultiplier.load();
+        if (pending != current)
+        {
+            // Check if we crossed a bar boundary (every 4 beats in voice-time)
+            double voiceStartBeat = startBeat * current;
+            double voiceEndBeat = endBeat * current;
+            int startBar = static_cast<int>(voiceStartBeat / 4.0);
+            int endBar = static_cast<int>(voiceEndBeat / 4.0);
+
+            if (endBar > startBar || voiceStartBeat == 0.0)
+            {
+                // Crossed a bar boundary - apply pending change
+                voice.tempoMultiplier.store(pending);
+            }
+        }
+    }
 
     if (endBeat >= loopEnd)
     {
@@ -186,18 +212,33 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
         if (patternLength <= 0)
             continue;
 
-        // Wrap the global position to pattern-local position
-        double wrappedStart = std::fmod(startBeat, patternLength);
-        double wrappedEnd = wrappedStart + blockLength;
+        // Scale global positions by voice's tempo multiplier
+        double multiplier = voice.tempoMultiplier.load();
+        if (multiplier <= 0) multiplier = 1.0;
+        double voiceStartBeat = startBeat * multiplier;
+        double voiceBlockLength = blockLength * multiplier;
+
+        // Wrap the voice-scaled position to pattern-local position
+        double wrappedStart = std::fmod(voiceStartBeat, patternLength);
+        double wrappedEnd = wrappedStart + voiceBlockLength;
 
         // Helper to add note-on with sample-accurate timing
-        auto addNoteOn = [&](const MIDINote *note, double noteOffsetBeats) {
-            int samplePos = baseSampleOffset + static_cast<int>(noteOffsetBeats / beatsPerSample_);
+        // noteOffsetBeats is in voice-time, need to convert to global-time for sample position
+        auto addNoteOn = [&](const MIDINote *note, double noteOffsetBeatsVoiceTime) {
+            // Convert voice-time offset to global-time
+            double noteOffsetGlobal = multiplier > 0
+                ? noteOffsetBeatsVoiceTime / multiplier
+                : noteOffsetBeatsVoiceTime;
+            int samplePos = baseSampleOffset + static_cast<int>(noteOffsetGlobal / beatsPerSample_);
             samplePos = std::clamp(samplePos, 0, numSamples - 1);
             midiBuffers[v]->addEvent(
                 juce::MidiMessage::noteOn(1, note->pitch, (juce::uint8)note->velocity),
                 samplePos);
-            double noteEndGlobal = startBeat + noteOffsetBeats + note->duration;
+            // Note duration is also in voice-time, convert to global-time for end tracking
+            double durationGlobal = multiplier > 0
+                ? note->duration / multiplier
+                : note->duration;
+            double noteEndGlobal = startBeat + noteOffsetGlobal + durationGlobal;
             activeNotes_.push_back({v, note->pitch, noteEndGlobal});
         };
 
@@ -435,11 +476,16 @@ void SurgeBoxEngine::mixVoices(float *outputL, float *outputR, int numSamples)
             continue;
 
         // Sync Surge's internal time with our sequencer ONCE at block start
+        // Use the voice's tempo multiplier so LFOs/effects sync to voice tempo
         auto *synth = processors_[v]->surge.get();
-        synth->time_data.tempo = project_.tempo;
+        double multiplier = voice.tempoMultiplier.load();
+        if (multiplier <= 0) multiplier = 1.0;
+        synth->time_data.tempo = project_.tempo * multiplier;
         synth->time_data.ppqPos = blockStartBeat_;
         synth->time_data.timeSigNumerator = 4;
         synth->time_data.timeSigDenominator = 4;
+        // Note: processBlock() will also call resetStateFromTimeData() internally,
+        // but setting time_data first ensures our tempo is used
         synth->resetStateFromTimeData();
 
         // Clear and process with MIDI events from sequencer

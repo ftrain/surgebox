@@ -11,6 +11,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SurgeBoxProcessor.h"
 #include "gui/widgets/PianoRollWidget.h"
+#include "gui/widgets/PianoKeyboardWidget.h"
 #include "gui/widgets/VoiceSelector.h"
 #include "gui/widgets/TransportControls.h"
 #include "gui/SurgeBoxLookAndFeel.h"
@@ -20,7 +21,8 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
                        public juce::Button::Listener,
                        public juce::ComboBox::Listener,
                        public juce::Slider::Listener,
-                       public juce::MidiKeyboardState::Listener
+                       public juce::MidiKeyboardState::Listener,
+                       public juce::ScrollBar::Listener
 {
   public:
     explicit SurgeBoxEditor(SurgeBoxProcessor &);
@@ -39,6 +41,9 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
                       float velocity) override;
     void handleNoteOff(juce::MidiKeyboardState *, int midiChannel, int midiNoteNumber,
                        float velocity) override;
+
+    // ScrollBar::Listener
+    void scrollBarMoved(juce::ScrollBar *scrollBar, double newRangeStart) override;
 
   private:
     SurgeBoxProcessor &processor_;
@@ -63,12 +68,20 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     std::unique_ptr<juce::ComboBox> gridSizeCombo_;
     std::unique_ptr<juce::Label> gridSizeLabel_;
 
+    // Scale picker
+    std::unique_ptr<juce::ComboBox> scaleRootCombo_;
+    std::unique_ptr<juce::ComboBox> scaleTypeCombo_;
+    std::unique_ptr<juce::Label> scaleLabel_;
+
     // Clear pattern button
     std::unique_ptr<juce::TextButton> clearPatternBtn_;
 
     // Tempo control
     std::unique_ptr<juce::Slider> tempoSlider_;
     std::unique_ptr<juce::Label> tempoLabel_;
+
+    // Tempo multiplier (speed control)
+    std::unique_ptr<juce::ComboBox> tempoMultiplierCombo_;
 
     // Surge editor in scrollable viewport
     std::unique_ptr<juce::Viewport> surgeViewport_;
@@ -79,8 +92,10 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     // Piano roll in scrollable viewport with resizable divider
     std::unique_ptr<juce::Viewport> pianoRollViewport_;
     std::unique_ptr<SurgeBox::PianoRollWidget> pianoRoll_;
+    std::unique_ptr<SurgeBox::PianoKeyboardWidget> pianoKeyboard_;
     int pianoRollHeight_{300};
     bool draggingDivider_{false};
+    static constexpr int PIANO_KEYBOARD_HEIGHT = 30;
 
     // Layout: Surge → Command bar → Piano Roll
     static constexpr int COMMAND_BAR_HEIGHT = 44;

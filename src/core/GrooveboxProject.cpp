@@ -207,6 +207,40 @@ void GlobalFXSlot::fromXML(TiXmlElement *element)
 
 VoiceState::VoiceState() : name("Voice") {}
 
+VoiceState::VoiceState(const VoiceState &other)
+    : name(other.name),
+      patchData(other.patchData),
+      pattern(other.pattern),
+      volume(other.volume),
+      pan(other.pan),
+      sendA(other.sendA),
+      sendB(other.sendB),
+      mute(other.mute),
+      solo(other.solo),
+      tempoMultiplier(other.tempoMultiplier.load()),
+      pendingTempoMultiplier(other.pendingTempoMultiplier.load())
+{
+}
+
+VoiceState &VoiceState::operator=(const VoiceState &other)
+{
+    if (this != &other)
+    {
+        name = other.name;
+        patchData = other.patchData;
+        pattern = other.pattern;
+        volume = other.volume;
+        pan = other.pan;
+        sendA = other.sendA;
+        sendB = other.sendB;
+        mute = other.mute;
+        solo = other.solo;
+        tempoMultiplier.store(other.tempoMultiplier.load());
+        pendingTempoMultiplier.store(other.pendingTempoMultiplier.load());
+    }
+    return *this;
+}
+
 void VoiceState::toXML(TiXmlElement *parent, int index) const
 {
     TiXmlElement voiceEl("voice");

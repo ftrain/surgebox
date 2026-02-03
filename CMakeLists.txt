@@ -108,6 +108,8 @@ target_sources(surgebox PRIVATE
     src/plugin/SurgeBoxEditor.h
     src/gui/widgets/PianoRollWidget.cpp
     src/gui/widgets/PianoRollWidget.h
+    src/gui/widgets/PianoKeyboardWidget.cpp
+    src/gui/widgets/PianoKeyboardWidget.h
     src/gui/widgets/VoiceSelector.cpp
     src/gui/widgets/VoiceSelector.h
     src/gui/widgets/TransportControls.cpp

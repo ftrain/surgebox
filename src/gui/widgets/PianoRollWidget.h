@@ -12,11 +12,29 @@
 #include "core/PatternModel.h"
 #include <functional>
 #include <set>
+#include <map>
 
 namespace SurgeBox
 {
 
 class SurgeBoxEngine;
+
+enum class ScaleType
+{
+    Chromatic,
+    Major,
+    NaturalMinor,
+    HarmonicMinor,
+    MelodicMinor,
+    Pentatonic,
+    PentatonicMinor,
+    Blues,
+    Dorian,
+    Phrygian,
+    Lydian,
+    Mixolydian,
+    Locrian
+};
 
 /**
  * Vertical piano roll with time flowing top-to-bottom.
@@ -41,6 +59,7 @@ class PianoRollWidget : public juce::Component
     void mouseDown(const juce::MouseEvent &e) override;
     void mouseDrag(const juce::MouseEvent &e) override;
     void mouseUp(const juce::MouseEvent &e) override;
+    void mouseMove(const juce::MouseEvent &e) override;
     void mouseWheelMove(const juce::MouseEvent &e, const juce::MouseWheelDetails &wheel) override;
     bool keyPressed(const juce::KeyPress &key) override;
 
@@ -62,6 +81,16 @@ class PianoRollWidget : public juce::Component
     std::function<void(int pitch, int velocity)> onNoteOn;
     std::function<void(int pitch)> onNoteOff;
 
+    // Scale filtering
+    void setScale(int root, ScaleType type);
+    int getScaleRoot() const { return scaleRoot_; }
+    ScaleType getScaleType() const { return scaleType_; }
+    bool isNoteInScale(int pitch) const;
+    const std::vector<int>& getVisiblePitches() const { return visiblePitches_; }
+    int getVisibleNoteCount() const { return static_cast<int>(visiblePitches_.size()); }
+    int pitchToColumn(int pitch) const;
+    int columnToPitch(int column) const;
+
   private:
     // Grid settings - vertical orientation
     int lowestNote_{21};    // A0 (lowest piano key)
@@ -76,6 +105,12 @@ class PianoRollWidget : public juce::Component
     double stepSize_{0.25};
     StepRecordCallback stepRecordCallback_;
 
+    // Scale filtering
+    int scaleRoot_{0};  // 0=C, 1=C#, ... 11=B
+    ScaleType scaleType_{ScaleType::Chromatic};
+    std::vector<int> visiblePitches_;
+    void rebuildVisiblePitches();
+
     // Multi-selection
     std::set<int> selectedNotes_;
 
@@ -86,6 +121,11 @@ class PianoRollWidget : public juce::Component
     double dragStartDuration_{0.0};
     double originalNoteBeat_{0.0};
     int originalNotePitch_{0};
+
+    // Original positions of all selected notes for multi-note move
+    // Key is original (beat, pitch), value is duration - this survives index changes
+    struct OriginalNoteData { double beat; int pitch; double duration; int velocity; };
+    std::vector<OriginalNoteData> originalNotes_;
 
     enum class DragMode
     {
@@ -141,8 +181,8 @@ class PianoRollWidget : public juce::Component
     // Sequencer playback highlighting
     std::vector<uint8_t> sequencerPlayingNotes_;
 
-    // Piano key area height (at top)
-    static constexpr int PIANO_KEY_HEIGHT = 30;
+    // Piano key is now a separate widget - this is kept for backwards compatibility
+    static constexpr int PIANO_KEY_HEIGHT = 0;
 
     // Colors
     juce::Colour bgColor_{0xff1a1a2e};

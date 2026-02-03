@@ -20,6 +20,99 @@ PianoRollWidget::PianoRollWidget()
 {
     setOpaque(true);
     setWantsKeyboardFocus(true);
+    rebuildVisiblePitches();
+}
+
+// Scale intervals (semitones from root)
+static const std::vector<int>& getScaleIntervals(ScaleType type)
+{
+    static const std::vector<int> chromatic = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    static const std::vector<int> major = {0, 2, 4, 5, 7, 9, 11};
+    static const std::vector<int> naturalMinor = {0, 2, 3, 5, 7, 8, 10};
+    static const std::vector<int> harmonicMinor = {0, 2, 3, 5, 7, 8, 11};
+    static const std::vector<int> melodicMinor = {0, 2, 3, 5, 7, 9, 11};
+    static const std::vector<int> pentatonic = {0, 2, 4, 7, 9};
+    static const std::vector<int> pentatonicMinor = {0, 3, 5, 7, 10};
+    static const std::vector<int> blues = {0, 3, 5, 6, 7, 10};
+    static const std::vector<int> dorian = {0, 2, 3, 5, 7, 9, 10};
+    static const std::vector<int> phrygian = {0, 1, 3, 5, 7, 8, 10};
+    static const std::vector<int> lydian = {0, 2, 4, 6, 7, 9, 11};
+    static const std::vector<int> mixolydian = {0, 2, 4, 5, 7, 9, 10};
+    static const std::vector<int> locrian = {0, 1, 3, 5, 6, 8, 10};
+
+    switch (type)
+    {
+        case ScaleType::Major: return major;
+        case ScaleType::NaturalMinor: return naturalMinor;
+        case ScaleType::HarmonicMinor: return harmonicMinor;
+        case ScaleType::MelodicMinor: return melodicMinor;
+        case ScaleType::Pentatonic: return pentatonic;
+        case ScaleType::PentatonicMinor: return pentatonicMinor;
+        case ScaleType::Blues: return blues;
+        case ScaleType::Dorian: return dorian;
+        case ScaleType::Phrygian: return phrygian;
+        case ScaleType::Lydian: return lydian;
+        case ScaleType::Mixolydian: return mixolydian;
+        case ScaleType::Locrian: return locrian;
+        default: return chromatic;
+    }
+}
+
+void PianoRollWidget::setScale(int root, ScaleType type)
+{
+    scaleRoot_ = root % 12;
+    scaleType_ = type;
+    rebuildVisiblePitches();
+    repaint();
+}
+
+bool PianoRollWidget::isNoteInScale(int pitch) const
+{
+    if (scaleType_ == ScaleType::Chromatic)
+        return true;
+
+    int noteInOctave = ((pitch - scaleRoot_) % 12 + 12) % 12;
+    const auto& intervals = getScaleIntervals(scaleType_);
+    return std::find(intervals.begin(), intervals.end(), noteInOctave) != intervals.end();
+}
+
+void PianoRollWidget::rebuildVisiblePitches()
+{
+    visiblePitches_.clear();
+
+    if (scaleType_ == ScaleType::Chromatic)
+    {
+        // All pitches visible
+        for (int pitch = lowestNote_; pitch < highestNote_; ++pitch)
+            visiblePitches_.push_back(pitch);
+    }
+    else
+    {
+        // Only scale pitches
+        for (int pitch = lowestNote_; pitch < highestNote_; ++pitch)
+        {
+            if (isNoteInScale(pitch))
+                visiblePitches_.push_back(pitch);
+        }
+    }
+}
+
+int PianoRollWidget::pitchToColumn(int pitch) const
+{
+    if (scaleType_ == ScaleType::Chromatic)
+        return pitch - lowestNote_;
+
+    auto it = std::find(visiblePitches_.begin(), visiblePitches_.end(), pitch);
+    if (it != visiblePitches_.end())
+        return static_cast<int>(std::distance(visiblePitches_.begin(), it));
+    return -1;  // Not in scale
+}
+
+int PianoRollWidget::columnToPitch(int column) const
+{
+    if (column < 0 || column >= static_cast<int>(visiblePitches_.size()))
+        return -1;
+    return visiblePitches_[column];
 }
 
 PianoRollWidget::~PianoRollWidget()
@@ -171,21 +264,23 @@ void PianoRollWidget::removeOverlappingNotes(int pitch, double startBeat, double
 
 juce::Rectangle<int> PianoRollWidget::getPianoArea() const
 {
-    auto bounds = getLocalBounds();
-    return bounds.removeFromTop(PIANO_KEY_HEIGHT);
+    // Piano is now separate - return empty rect
+    return {};
 }
 
 juce::Rectangle<int> PianoRollWidget::getGridArea() const
 {
-    auto bounds = getLocalBounds();
-    bounds.removeFromTop(PIANO_KEY_HEIGHT);
-    return bounds;
+    // Grid now fills the entire widget
+    return getLocalBounds();
 }
 
 int PianoRollWidget::getPitchAtX(int x) const
 {
-    int noteIndex = x / noteWidth_;
-    return std::clamp(lowestNote_ + noteIndex, lowestNote_, highestNote_ - 1);
+    int column = x / noteWidth_;
+    int pitch = columnToPitch(column);
+    if (pitch < 0)
+        return std::clamp(lowestNote_ + column, lowestNote_, highestNote_ - 1);
+    return pitch;
 }
 
 void PianoRollWidget::playNote(int pitch)
@@ -217,10 +312,9 @@ void PianoRollWidget::paint(juce::Graphics &g)
     else
         sequencerPlayingNotes_.clear();
 
-    auto pianoArea = bounds.removeFromTop(PIANO_KEY_HEIGHT);
+    // Piano keys are now in a separate sticky widget
     auto gridArea = bounds;
 
-    drawPianoKeys(g, pianoArea);
     drawGrid(g, gridArea);
     drawNotes(g, gridArea);
     drawPlayhead(g, gridArea);
@@ -284,7 +378,7 @@ void PianoRollWidget::drawGrid(juce::Graphics &g, const juce::Rectangle<int> &ar
     if (!patternModel_)
         return;
 
-    int numNotes = highestNote_ - lowestNote_;
+    int numNotes = static_cast<int>(visiblePitches_.size());
     double totalBeats = patternModel_->lengthInBeats();
 
     // Only draw grid for actual pattern length
@@ -310,7 +404,7 @@ void PianoRollWidget::drawGrid(juce::Graphics &g, const juce::Rectangle<int> &ar
     // Draw black key column shading (vertical bands) - only within pattern height
     for (int i = 0; i < numNotes; i++)
     {
-        int note = lowestNote_ + i;
+        int note = visiblePitches_[i];
         int noteInOctave = note % 12;
         bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
                           noteInOctave == 8 || noteInOctave == 10);
@@ -329,7 +423,7 @@ void PianoRollWidget::drawGrid(juce::Graphics &g, const juce::Rectangle<int> &ar
     for (int i = 0; i <= numNotes; i++)
     {
         int x = area.getX() + (i * noteWidth_);
-        int note = lowestNote_ + i;
+        int note = (i < numNotes) ? visiblePitches_[i] : (visiblePitches_.empty() ? 0 : visiblePitches_.back() + 1);
         int noteInOctave = note % 12;
 
         bool isC = (noteInOctave == 0);
@@ -379,20 +473,30 @@ void PianoRollWidget::drawNotes(juce::Graphics &g, const juce::Rectangle<int> &a
 
     for (int i = 0; i < patternModel_->getNumNotes(); ++i)
     {
+        double startBeat, duration;
+        int pitch, velocity;
+        patternModel_->getNoteAt(i, startBeat, duration, pitch, velocity);
+
         auto noteRect = noteToScreen(i, area);
         if (noteRect.isEmpty() || !noteRect.intersects(area))
             continue;
 
         bool selected = isNoteSelected(i);
-        g.setColour(selected ? noteSelectedColor_ : noteColor_);
+        bool inScale = isNoteInScale(pitch);
+
+        // Notes not in scale are dimmed
+        if (!inScale && scaleType_ != ScaleType::Chromatic)
+        {
+            g.setColour((selected ? noteSelectedColor_ : noteColor_).withAlpha(0.4f));
+        }
+        else
+        {
+            g.setColour(selected ? noteSelectedColor_ : noteColor_);
+        }
         g.fillRoundedRectangle(noteRect.toFloat(), 3.0f);
 
         g.setColour(juce::Colours::white.withAlpha(0.3f));
         g.drawRoundedRectangle(noteRect.toFloat(), 3.0f, 1.0f);
-
-        double startBeat, duration;
-        int pitch, velocity;
-        patternModel_->getNoteAt(i, startBeat, duration, pitch, velocity);
 
         float velAlpha = 1.0f - (static_cast<float>(velocity) / 127.0f) * 0.5f;
         g.setColour(juce::Colours::black.withAlpha(velAlpha * 0.3f));
@@ -405,7 +509,7 @@ void PianoRollWidget::drawPlayhead(juce::Graphics &g, const juce::Rectangle<int>
     if (!engine_ || !engine_->isPlaying())
         return;
 
-    double playhead = engine_->getPlayheadBeats();
+    double playhead = engine_->getActiveVoicePlayheadBeats();
     int y = area.getY() + static_cast<int>(playhead * pixelsPerBeat_);
 
     if (y >= area.getY() && y <= area.getBottom())
@@ -454,10 +558,17 @@ std::pair<double, int> PianoRollWidget::screenToNote(juce::Point<int> pos,
                                                       const juce::Rectangle<int> &area)
 {
     double beat = (pos.y - area.getY()) / pixelsPerBeat_;
-    int noteIndex = (pos.x - area.getX()) / noteWidth_;
-    int pitch = lowestNote_ + noteIndex;
+    int column = (pos.x - area.getX()) / noteWidth_;
 
-    return {beat, std::clamp(pitch, lowestNote_, highestNote_ - 1)};
+    // Convert column to pitch using scale filtering
+    int pitch = columnToPitch(column);
+    if (pitch < 0)
+    {
+        // Fallback if column out of range
+        pitch = std::clamp(lowestNote_ + column, lowestNote_, highestNote_ - 1);
+    }
+
+    return {beat, pitch};
 }
 
 juce::Rectangle<int> PianoRollWidget::noteToScreen(int noteIndex,
@@ -470,7 +581,15 @@ juce::Rectangle<int> PianoRollWidget::noteToScreen(int noteIndex,
     int pitch, velocity;
     patternModel_->getNoteAt(noteIndex, startBeat, duration, pitch, velocity);
 
-    int noteCol = pitch - lowestNote_;
+    // Convert pitch to column using scale filtering
+    int noteCol = pitchToColumn(pitch);
+    if (noteCol < 0)
+    {
+        // Note is not in scale - still display it but at its chromatic position
+        // (dimmed rendering is handled in drawNotes)
+        noteCol = pitch - lowestNote_;
+    }
+
     int x = area.getX() + (noteCol * noteWidth_);
     int y = area.getY() + static_cast<int>(startBeat * pixelsPerBeat_);
     int h = static_cast<int>(duration * pixelsPerBeat_);
@@ -499,24 +618,7 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent &e)
 
     grabKeyboardFocus();
 
-    auto pianoArea = getPianoArea();
     auto gridArea = getGridArea();
-
-    // Check if clicking on piano keys
-    if (pianoArea.contains(e.getPosition()))
-    {
-        int pitch = getPitchAtX(e.x);
-        playNote(pitch);
-
-        // In step record mode, also add a note
-        if (stepRecordEnabled_)
-        {
-            addNoteAtCurrentStep(pitch, 100);
-        }
-
-        dragMode_ = DragMode::PlayingPiano;
-        return;
-    }
 
     auto [beat, pitch] = screenToNote(e.getPosition(), gridArea);
     double quantizedBeat = std::floor(beat / gridSize_) * gridSize_;
@@ -564,33 +666,70 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent &e)
         originalNoteBeat_ = startBeat;
         originalNotePitch_ = notePitch;
 
-        // Clicking existing note allows resize by dragging up/down
-        dragMode_ = DragMode::ResizeEnd;
-        patternModel_->beginTransaction("Resize Note");
+        // Determine drag mode based on click position within the note
+        auto noteRect = noteToScreen(clickedIndex, gridArea);
+        int clickYRelative = e.y - noteRect.getY();
+        int resizeZone = std::max(6, noteRect.getHeight() / 5);  // Bottom 20% or at least 6px
+
+        if (clickYRelative >= noteRect.getHeight() - resizeZone)
+        {
+            // Click on bottom edge - resize mode
+            dragMode_ = DragMode::ResizeEnd;
+            patternModel_->beginTransaction("Resize Note");
+        }
+        else
+        {
+            // Click on middle - move mode (horizontal + vertical)
+            dragMode_ = DragMode::Move;
+            patternModel_->beginTransaction("Move Notes");
+
+            // Store original data of ALL selected notes for multi-note move
+            // We store the full note data so we can find them even after indices change
+            originalNotes_.clear();
+            for (int idx : selectedNotes_)
+            {
+                double noteBeat, noteDur;
+                int notePitch, noteVel;
+                patternModel_->getNoteAt(idx, noteBeat, noteDur, notePitch, noteVel);
+                originalNotes_.push_back({noteBeat, notePitch, noteDur, noteVel});
+            }
+        }
     }
     else
     {
-        // Clicked on empty space - add note and enter drawing mode
-        selectedNotes_.clear();
-
-        patternModel_->beginTransaction("Draw Notes");
-
-        // Remove any overlapping notes first
-        removeOverlappingNotes(pitch, quantizedBeat, quantizedBeat + gridSize_);
-
-        patternModel_->addNote(quantizedBeat, gridSize_, pitch, 100);
-
-        int newIndex = patternModel_->findNoteAt(quantizedBeat, pitch);
-        if (newIndex >= 0)
+        // Clicked on empty space
+        if (e.mods.isShiftDown())
         {
-            selectedNotes_.insert(newIndex);
+            // Shift+click on empty space - box selection mode
+            dragMode_ = DragMode::BoxSelect;
+            boxSelectStart_ = e.getPosition();
+            boxSelectEnd_ = e.getPosition();
+            // Don't clear selection - shift allows additive selection
         }
+        else
+        {
+            // Normal click on empty space - add note and enter drawing mode
+            selectedNotes_.clear();
 
-        // Enter drawing mode for drag-to-draw
-        dragMode_ = DragMode::Drawing;
-        lastDrawnBeat_ = quantizedBeat;
-        lastDrawnPitch_ = pitch;
-        draggingNoteIndex_ = -1;
+            patternModel_->beginTransaction("Draw Notes");
+
+            // Remove any overlapping notes first
+            removeOverlappingNotes(pitch, quantizedBeat, quantizedBeat + gridSize_);
+
+            patternModel_->addNote(quantizedBeat, gridSize_, pitch, 100);
+
+            int newIndex = patternModel_->findNoteAt(quantizedBeat, pitch);
+            if (newIndex >= 0)
+            {
+                selectedNotes_.insert(newIndex);
+            }
+
+            // Enter drawing mode for drag-to-draw
+            dragMode_ = DragMode::Drawing;
+            lastDrawnBeat_ = quantizedBeat;
+            lastDrawnPitch_ = pitch;
+            draggingNoteIndex_ = -1;
+        }
     }
     repaint();
 }
@@ -600,22 +739,9 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent &e)
     if (!patternModel_)
         return;
 
-    // Handle piano playing
+    // Piano playing is now handled by PianoKeyboardWidget
     if (dragMode_ == DragMode::PlayingPiano)
-    {
-        auto pianoArea = getPianoArea();
-        if (pianoArea.contains(e.getPosition()))
-        {
-            int pitch = getPitchAtX(e.x);
-            if (pitch != playingNote_)
-            {
-                if (playingNote_ >= 0)
-                    stopNote(playingNote_);
-                playNote(pitch);
-            }
-        }
         return;
-    }
 
     auto gridArea = getGridArea();
 
@@ -679,17 +805,64 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent &e)
         double beatDelta = quantizedBeat - dragStartBeat_;
         int pitchDelta = pitch - dragStartPitch_;
 
-        double newBeat = std::max(0.0, originalNoteBeat_ + beatDelta);
-        int newPitch = std::clamp(originalNotePitch_ + pitchDelta, lowestNote_, highestNote_ - 1);
-
-        // Only update if position actually changed
-        double currentBeat, currentDuration;
-        int currentPitch, currentVel;
-        patternModel_->getNoteAt(draggingNoteIndex_, currentBeat, currentDuration, currentPitch, currentVel);
-
-        if (newBeat != currentBeat || newPitch != currentPitch)
+        // Move ALL selected notes by the same delta
+        // We need to find each note by searching, since indices change when notes are moved
+        for (const auto& origNote : originalNotes_)
         {
-            patternModel_->moveNote(draggingNoteIndex_, newBeat, newPitch);
+            double targetBeat = std::max(0.0, origNote.beat + beatDelta);
+            int targetPitch = std::clamp(origNote.pitch + pitchDelta, lowestNote_, highestNote_ - 1);
+
+            // Find this note's current index - it might have moved from its original position
+            // due to previous iterations of this loop
+            int currentIdx = -1;
+            for (int i = 0; i < patternModel_->getNumNotes(); ++i)
+            {
+                double noteBeat, noteDur;
+                int notePitch, noteVel;
+                patternModel_->getNoteAt(i, noteBeat, noteDur, notePitch, noteVel);
+
+                // Match by duration and velocity (unique identifiers that don't change)
+                // and check if position is close to where we expect it
+                if (std::abs(noteDur - origNote.duration) < 0.001 &&
+                    noteVel == origNote.velocity)
+                {
+                    // Could be at original position or at a previously-moved position
+                    // Check if it matches our expected current position
+                    double expectedBeat = origNote.beat + beatDelta;
+                    int expectedPitch = origNote.pitch + pitchDelta;
+
+                    // Either at original or already moved to expected
+                    if ((std::abs(noteBeat - origNote.beat) < 0.001 && notePitch == origNote.pitch) ||
+                        (std::abs(noteBeat - expectedBeat) < 0.001 && notePitch == expectedPitch))
+                    {
+                        currentIdx = i;
+                        break;
+                    }
+                }
+            }
+
+            if (currentIdx >= 0)
+            {
+                double currentBeat, currentDur;
+                int currentPitch, currentVel;
+                patternModel_->getNoteAt(currentIdx, currentBeat, currentDur, currentPitch, currentVel);
+
+                if (std::abs(currentBeat - targetBeat) > 0.001 || currentPitch != targetPitch)
+                {
+                    patternModel_->moveNote(currentIdx, targetBeat, targetPitch);
+                }
+            }
+        }
+
+        // Update selection to track moved notes
+        selectedNotes_.clear();
+        for (const auto& origNote : originalNotes_)
+        {
+            double targetBeat = std::max(0.0, origNote.beat + beatDelta);
+            int targetPitch = std::clamp(origNote.pitch + pitchDelta, lowestNote_, highestNote_ - 1);
+            int idx = patternModel_->findNoteAt(targetBeat, targetPitch);
+            if (idx >= 0)
+                selectedNotes_.insert(idx);
         }
     }
     else if (dragMode_ == DragMode::ResizeEnd)
@@ -729,18 +902,113 @@ void PianoRollWidget::mouseUp(const juce::MouseEvent &e)
 
         selectNotesInRect(selRect, gridArea);
     }
-    else if (dragMode_ == DragMode::Move && draggingNoteIndex_ >= 0)
+    else if (dragMode_ == DragMode::Move && !originalNotes_.empty())
     {
-        // After moving, remove any notes that overlap with the moved note
-        double startBeat, duration;
-        int pitch, velocity;
-        patternModel_->getNoteAt(draggingNoteIndex_, startBeat, duration, pitch, velocity);
-        removeOverlappingNotes(pitch, startBeat, startBeat + duration, draggingNoteIndex_);
+        // After moving, remove any notes that overlap with the moved notes
+        // The selected notes are already updated to their new indices
+
+        // For each selected note, remove overlapping non-selected notes
+        std::set<int> toRemove;
+        for (int selectedIdx : selectedNotes_)
+        {
+            if (selectedIdx >= patternModel_->getNumNotes())
+                continue;
+
+            double startBeat, duration;
+            int pitch, velocity;
+            patternModel_->getNoteAt(selectedIdx, startBeat, duration, pitch, velocity);
+            double noteEnd = startBeat + duration;
+
+            for (int i = 0; i < patternModel_->getNumNotes(); ++i)
+            {
+                if (selectedNotes_.count(i) > 0)
+                    continue;  // Don't remove other selected notes
+
+                double otherStart, otherDur;
+                int otherPitch, otherVel;
+                patternModel_->getNoteAt(i, otherStart, otherDur, otherPitch, otherVel);
+
+                if (otherPitch != pitch)
+                    continue;
+
+                double otherEnd = otherStart + otherDur;
+
+                if (otherStart < noteEnd && otherEnd > startBeat)
+                {
+                    toRemove.insert(i);
+                }
+            }
+        }
+
+        // Remove overlapping notes in reverse order to preserve indices
+        for (auto it = toRemove.rbegin(); it != toRemove.rend(); ++it)
+        {
+            patternModel_->removeNote(*it);
+        }
+
+        // Update selection after removals
+        selectedNotes_.clear();
+        for (const auto& origNote : originalNotes_)
+        {
+            // Find where the note ended up
+            for (int i = 0; i < patternModel_->getNumNotes(); ++i)
+            {
+                double noteBeat, noteDur;
+                int notePitch, noteVel;
+                patternModel_->getNoteAt(i, noteBeat, noteDur, notePitch, noteVel);
+
+                if (std::abs(noteDur - origNote.duration) < 0.001 &&
+                    noteVel == origNote.velocity)
+                {
+                    selectedNotes_.insert(i);
+                    break;
+                }
+            }
+        }
+
+        originalNotes_.clear();
     }
 
     draggingNoteIndex_ = -1;
     dragMode_ = DragMode::None;
     repaint();
+}
+
+void PianoRollWidget::mouseMove(const juce::MouseEvent &e)
+{
+    if (!patternModel_)
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    auto gridArea = getGridArea();
+
+    // Check if hovering over a note
+    auto [beat, pitch] = screenToNote(e.getPosition(), gridArea);
+    double quantizedBeat = std::floor(beat / gridSize_) * gridSize_;
+    int hoveredIndex = patternModel_->findNoteContaining(quantizedBeat, pitch, 0.05);
+
+    if (hoveredIndex >= 0)
+    {
+        // Check if hovering over resize zone (bottom edge)
+        auto noteRect = noteToScreen(hoveredIndex, gridArea);
+        int mouseYRelative = e.y - noteRect.getY();
+        int resizeZone = std::max(6, noteRect.getHeight() / 5);
+
+        if (mouseYRelative >= noteRect.getHeight() - resizeZone)
+        {
+            setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        }
+        else
+        {
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        }
+    }
+    else
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
 }
 
 void PianoRollWidget::mouseWheelMove(const juce::MouseEvent &e,

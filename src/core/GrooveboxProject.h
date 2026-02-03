@@ -9,6 +9,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -127,8 +128,12 @@ struct VoiceState
     float sendB{0.0f};
     bool mute{false};
     bool solo{false};
+    std::atomic<double> tempoMultiplier{1.0};        // Current tempo multiplier (0.0625 to 4.0)
+    std::atomic<double> pendingTempoMultiplier{1.0}; // Pending change (applied at next bar boundary)
 
     VoiceState();
+    VoiceState(const VoiceState &other);
+    VoiceState &operator=(const VoiceState &other);
 
     void toXML(TiXmlElement *parent, int index) const;
     void fromXML(TiXmlElement *element, int index);

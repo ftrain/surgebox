@@ -82,6 +82,46 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor &p)
     clearPatternBtn_->setTooltip("Clear pattern");
     addAndMakeVisible(*clearPatternBtn_);
 
+    // Scale picker
+    scaleLabel_ = std::make_unique<juce::Label>("", "Scale:");
+    scaleLabel_->setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(*scaleLabel_);
+
+    scaleRootCombo_ = std::make_unique<juce::ComboBox>();
+    scaleRootCombo_->addItem("C", 1);
+    scaleRootCombo_->addItem("C#", 2);
+    scaleRootCombo_->addItem("D", 3);
+    scaleRootCombo_->addItem("D#", 4);
+    scaleRootCombo_->addItem("E", 5);
+    scaleRootCombo_->addItem("F", 6);
+    scaleRootCombo_->addItem("F#", 7);
+    scaleRootCombo_->addItem("G", 8);
+    scaleRootCombo_->addItem("G#", 9);
+    scaleRootCombo_->addItem("A", 10);
+    scaleRootCombo_->addItem("A#", 11);
+    scaleRootCombo_->addItem("B", 12);
+    scaleRootCombo_->setSelectedId(1);
+    scaleRootCombo_->addListener(this);
+    addAndMakeVisible(*scaleRootCombo_);
+
+    scaleTypeCombo_ = std::make_unique<juce::ComboBox>();
+    scaleTypeCombo_->addItem("Chromatic", 1);
+    scaleTypeCombo_->addItem("Major", 2);
+    scaleTypeCombo_->addItem("Minor", 3);
+    scaleTypeCombo_->addItem("Harmonic Min", 4);
+    scaleTypeCombo_->addItem("Melodic Min", 5);
+    scaleTypeCombo_->addItem("Pentatonic", 6);
+    scaleTypeCombo_->addItem("Pent. Minor", 7);
+    scaleTypeCombo_->addItem("Blues", 8);
+    scaleTypeCombo_->addItem("Dorian", 9);
+    scaleTypeCombo_->addItem("Phrygian", 10);
+    scaleTypeCombo_->addItem("Lydian", 11);
+    scaleTypeCombo_->addItem("Mixolydian", 12);
+    scaleTypeCombo_->addItem("Locrian", 13);
+    scaleTypeCombo_->setSelectedId(1);
+    scaleTypeCombo_->addListener(this);
+    addAndMakeVisible(*scaleTypeCombo_);
+
     // Tempo control
     tempoLabel_ = std::make_unique<juce::Label>("", "BPM:");
     tempoLabel_->setColour(juce::Label::textColourId, juce::Colours::white);
@@ -94,6 +134,20 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor &p)
     tempoSlider_->setTextBoxStyle(juce::Slider::TextBoxRight, false, 45, 20);
     tempoSlider_->addListener(this);
     addAndMakeVisible(*tempoSlider_);
+
+    // Tempo multiplier (speed control)
+    tempoMultiplierCombo_ = std::make_unique<juce::ComboBox>();
+    tempoMultiplierCombo_->addItem("4x", 1);
+    tempoMultiplierCombo_->addItem("2x", 2);
+    tempoMultiplierCombo_->addItem("1x", 3);
+    tempoMultiplierCombo_->addItem("1/2", 4);
+    tempoMultiplierCombo_->addItem("1/4", 5);
+    tempoMultiplierCombo_->addItem("1/8", 6);
+    tempoMultiplierCombo_->addItem("1/16", 7);
+    tempoMultiplierCombo_->setSelectedId(3);  // Default to 1x
+    tempoMultiplierCombo_->setTooltip("Playback speed multiplier");
+    tempoMultiplierCombo_->addListener(this);
+    addAndMakeVisible(*tempoMultiplierCombo_);
 
     // Create scrollable viewport for Surge editor
     surgeViewport_ = std::make_unique<juce::Viewport>();
@@ -110,6 +164,29 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor &p)
     pianoRoll_->setEngine(&engine_);
     pianoRoll_->setPatternModel(engine_.getActivePatternModel());
     pianoRollViewport_->setViewedComponent(pianoRoll_.get(), false);
+
+    // Create sticky piano keyboard above the viewport
+    pianoKeyboard_ = std::make_unique<SurgeBox::PianoKeyboardWidget>();
+    addAndMakeVisible(*pianoKeyboard_);
+
+    // Wire up keyboard note preview callbacks
+    pianoKeyboard_->onNoteOn = [this](int pitch, int velocity) {
+        auto *synth = engine_.getActiveSynth();
+        if (synth)
+            synth->playNote(0, pitch, velocity, 0, -1);
+
+        // In step record mode, also add a note to the pattern
+        if (stepRecordEnabled_ && pianoRoll_)
+            pianoRoll_->addNoteAtCurrentStep(pitch, velocity);
+    };
+    pianoKeyboard_->onNoteOff = [this](int pitch) {
+        auto *synth = engine_.getActiveSynth();
+        if (synth)
+            synth->releaseNote(0, pitch, 0);
+    };
+
+    // Listen to viewport scroll changes to sync keyboard
+    pianoRollViewport_->getHorizontalScrollBar().addListener(this);
 
     // Set initial pattern to 1 bar
     auto *model = engine_.getActivePatternModel();
@@ -143,6 +220,23 @@ SurgeBoxEditor::~SurgeBoxEditor()
 {
     stopTimer();
     engine_.onVoiceChanged = nullptr;
+
+    // Clear piano keyboard callbacks to prevent access during destruction
+    if (pianoKeyboard_)
+    {
+        pianoKeyboard_->onNoteOn = nullptr;
+        pianoKeyboard_->onNoteOff = nullptr;
+    }
+
+    // Clear piano roll callbacks
+    if (pianoRoll_)
+    {
+        pianoRoll_->onNoteOn = nullptr;
+        pianoRoll_->onNoteOff = nullptr;
+    }
+
+    // Remove scroll bar listener
+    pianoRollViewport_->getHorizontalScrollBar().removeListener(this);
 
     // Clear look-and-feel before destruction
     setLookAndFeel(nullptr);
@@ -271,26 +365,41 @@ void SurgeBoxEditor::resized()
     commandBar.removeFromLeft(10);
     tempoLabel_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
     tempoSlider_->setBounds(commandBar.removeFromLeft(140).reduced(pad, pad));
+    tempoMultiplierCombo_->setBounds(commandBar.removeFromLeft(55).reduced(pad, pad));
 
     // Clear button
     commandBar.removeFromLeft(10);
     clearPatternBtn_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
 
+    // Scale picker
+    commandBar.removeFromLeft(10);
+    scaleLabel_->setBounds(commandBar.removeFromLeft(45).reduced(pad, pad));
+    scaleRootCombo_->setBounds(commandBar.removeFromLeft(55).reduced(pad, pad));
+    scaleTypeCombo_->setBounds(commandBar.removeFromLeft(100).reduced(pad, pad));
+
     // 3. Surge viewport fills the rest (top)
     surgeViewport_->setBounds(bounds);
 
-    // Set up piano roll size
+    // Piano keyboard above the viewport
+    auto keyboardArea = pianoRollArea.removeFromTop(PIANO_KEYBOARD_HEIGHT);
+    pianoKeyboard_->setBounds(keyboardArea);
+
+    // Viewport below keyboard
     pianoRollViewport_->setBounds(pianoRollArea);
 
     auto *model = engine_.getActivePatternModel();
     int bars = model ? model->getBars() : 1;
-    int numNotes = 87;  // 88 piano keys (A0 to C8)
+    int numNotes = pianoRoll_->getVisibleNoteCount();
     int noteWidth = 18;
     double pixelsPerBeat = pianoRoll_->getPixelsPerBeat();
     int pianoRollInternalWidth = numNotes * noteWidth;
-    // Height based on pattern length plus piano key area (30px)
-    int pianoRollInternalHeight = static_cast<int>(bars * 4 * pixelsPerBeat) + 30 + 10;
+    // Height based on pattern length (no piano key area anymore)
+    int pianoRollInternalHeight = static_cast<int>(bars * 4 * pixelsPerBeat) + 10;
     pianoRoll_->setSize(pianoRollInternalWidth, pianoRollInternalHeight);
+
+    // Sync keyboard with piano roll's visible pitches and scroll position
+    pianoKeyboard_->setVisiblePitches(pianoRoll_->getVisiblePitches());
+    pianoKeyboard_->setScrollOffset(pianoRollViewport_->getViewPositionX());
 
     // Rescale Surge editor
     updateSurgeEditorScale();
@@ -302,7 +411,15 @@ void SurgeBoxEditor::resized()
 void SurgeBoxEditor::timerCallback()
 {
     if (engine_.isPlaying())
+    {
         pianoRoll_->repaint();
+        // Sync playing notes to keyboard
+        pianoKeyboard_->setPlayingNotes(engine_.getActivePlayingNotes());
+    }
+    else
+    {
+        pianoKeyboard_->setPlayingNotes({});
+    }
 
     transport_->updateDisplay();
 }
@@ -352,6 +469,53 @@ void SurgeBoxEditor::comboBoxChanged(juce::ComboBox *comboBox)
         }
         pianoRoll_->setGridSize(gridSize);
     }
+    else if (comboBox == scaleRootCombo_.get() || comboBox == scaleTypeCombo_.get())
+    {
+        int root = scaleRootCombo_->getSelectedId() - 1;  // 0-11
+        SurgeBox::ScaleType type = SurgeBox::ScaleType::Chromatic;
+        switch (scaleTypeCombo_->getSelectedId())
+        {
+            case 1: type = SurgeBox::ScaleType::Chromatic; break;
+            case 2: type = SurgeBox::ScaleType::Major; break;
+            case 3: type = SurgeBox::ScaleType::NaturalMinor; break;
+            case 4: type = SurgeBox::ScaleType::HarmonicMinor; break;
+            case 5: type = SurgeBox::ScaleType::MelodicMinor; break;
+            case 6: type = SurgeBox::ScaleType::Pentatonic; break;
+            case 7: type = SurgeBox::ScaleType::PentatonicMinor; break;
+            case 8: type = SurgeBox::ScaleType::Blues; break;
+            case 9: type = SurgeBox::ScaleType::Dorian; break;
+            case 10: type = SurgeBox::ScaleType::Phrygian; break;
+            case 11: type = SurgeBox::ScaleType::Lydian; break;
+            case 12: type = SurgeBox::ScaleType::Mixolydian; break;
+            case 13: type = SurgeBox::ScaleType::Locrian; break;
+        }
+        pianoRoll_->setScale(root, type);
+        pianoKeyboard_->setScale(root, type);
+        resized();  // Update piano roll width
+    }
+    else if (comboBox == tempoMultiplierCombo_.get())
+    {
+        double multiplier = 1.0;
+        switch (tempoMultiplierCombo_->getSelectedId())
+        {
+            case 1: multiplier = 4.0; break;    // 4x
+            case 2: multiplier = 2.0; break;    // 2x
+            case 3: multiplier = 1.0; break;    // 1x
+            case 4: multiplier = 0.5; break;    // 1/2
+            case 5: multiplier = 0.25; break;   // 1/4
+            case 6: multiplier = 0.125; break;  // 1/8
+            case 7: multiplier = 0.0625; break; // 1/16
+        }
+        // Set as pending - will be applied at next bar boundary
+        int activeVoice = engine_.getActiveVoice();
+        engine_.getProject().voices[activeVoice].pendingTempoMultiplier.store(multiplier);
+
+        // If not playing, apply immediately
+        if (!engine_.isPlaying())
+        {
+            engine_.getProject().voices[activeVoice].tempoMultiplier.store(multiplier);
+        }
+    }
 }
 
 void SurgeBoxEditor::sliderValueChanged(juce::Slider *slider)
@@ -359,6 +523,15 @@ void SurgeBoxEditor::sliderValueChanged(juce::Slider *slider)
     if (slider == tempoSlider_.get())
     {
         engine_.getProject().tempo = static_cast<float>(tempoSlider_->getValue());
+    }
+}
+
+void SurgeBoxEditor::scrollBarMoved(juce::ScrollBar *scrollBar, double /*newRangeStart*/)
+{
+    if (scrollBar == &pianoRollViewport_->getHorizontalScrollBar())
+    {
+        int scrollX = pianoRollViewport_->getViewPositionX();
+        pianoKeyboard_->setScrollOffset(scrollX);
     }
 }
 
@@ -647,12 +820,24 @@ void SurgeBoxEditor::updateSurgeEditorScale()
     }
 }
 
-void SurgeBoxEditor::onVoiceChanged(int /*voice*/)
+void SurgeBoxEditor::onVoiceChanged(int voice)
 {
     auto *model = engine_.getActivePatternModel();
     pianoRoll_->setPatternModel(model);
 
     updateMeasuresLabel();
+
+    // Update tempo multiplier display for the new voice
+    double multiplier = engine_.getProject().voices[voice].tempoMultiplier.load();
+    int comboId = 3;  // Default to 1x
+    if (multiplier >= 3.5) comboId = 1;       // 4x
+    else if (multiplier >= 1.5) comboId = 2;  // 2x
+    else if (multiplier >= 0.75) comboId = 3; // 1x
+    else if (multiplier >= 0.375) comboId = 4; // 1/2
+    else if (multiplier >= 0.1875) comboId = 5; // 1/4
+    else if (multiplier >= 0.09) comboId = 6; // 1/8
+    else comboId = 7; // 1/16
+    tempoMultiplierCombo_->setSelectedId(comboId, juce::dontSendNotification);
 
     rebuildSurgeEditor();
     voiceSelector_->repaint();
