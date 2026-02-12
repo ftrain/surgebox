@@ -44,6 +44,7 @@ juce::ValueTree PatternModel::createNoteTree(double startBeat, double duration, 
     note.setProperty(IDs::startBeat, startBeat, nullptr);
     note.setProperty(IDs::duration, duration, nullptr);
     note.setProperty(IDs::pitch, pitch, nullptr);
+    note.setProperty(IDs::originalPitch, pitch, nullptr);  // Store original chromatic pitch
     note.setProperty(IDs::velocity, velocity, nullptr);
     return note;
 }
@@ -85,8 +86,34 @@ void PatternModel::moveNote(int index, double newStartBeat, int newPitch)
         auto note = tree_.getChild(index);
         note.setProperty(IDs::startBeat, newStartBeat, undoManager_);
         note.setProperty(IDs::pitch, newPitch, undoManager_);
+        // When user manually moves a note, update originalPitch too
+        note.setProperty(IDs::originalPitch, newPitch, undoManager_);
         sortNotes();
     }
+}
+
+void PatternModel::setNotePitchForScale(int index, int newPitch)
+{
+    // Set pitch without changing originalPitch - used for scale quantization
+    if (index >= 0 && index < tree_.getNumChildren())
+    {
+        auto note = tree_.getChild(index);
+        note.setProperty(IDs::pitch, newPitch, undoManager_);
+        sortNotes();
+    }
+}
+
+int PatternModel::getOriginalPitch(int index) const
+{
+    if (index >= 0 && index < tree_.getNumChildren())
+    {
+        auto note = tree_.getChild(index);
+        // If originalPitch not set, fall back to pitch
+        if (note.hasProperty(IDs::originalPitch))
+            return static_cast<int>(note.getProperty(IDs::originalPitch));
+        return static_cast<int>(note.getProperty(IDs::pitch));
+    }
+    return 60; // Default to middle C
 }
 
 void PatternModel::resizeNote(int index, double newDuration)

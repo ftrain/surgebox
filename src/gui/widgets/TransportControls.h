@@ -9,6 +9,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "SurgeBoxWidgets.h"
 
 namespace SurgeBox
 {
@@ -24,22 +25,14 @@ class TransportControls : public juce::Component
     void setEngine(SurgeBoxEngine *engine);
     void updateDisplay();
 
-    void paint(juce::Graphics &g) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent &e) override;
 
   private:
     SurgeBoxEngine *engine_{nullptr};
 
-    juce::Rectangle<int> playBounds_;
-    juce::Rectangle<int> stopBounds_;
-    juce::Rectangle<int> tempoBounds_;
-
-    juce::Colour bgColor_{0xff16213e};
-    juce::Colour buttonColor_{0xff1a1a2e};
-    juce::Colour playColor_{0xff4caf50};
-    juce::Colour stopColor_{0xfff44336};
-    juce::Colour textColor_{0xffffffff};
+    std::unique_ptr<Widgets::IconButton> playButton_;
+    std::unique_ptr<Widgets::IconButton> stopButton_;
+    std::unique_ptr<Widgets::NumberField> tempoField_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransportControls)
 };

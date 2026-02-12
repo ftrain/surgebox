@@ -24,6 +24,7 @@ inline const juce::Identifier swing{"swing"};
 inline const juce::Identifier startBeat{"startBeat"};
 inline const juce::Identifier duration{"duration"};
 inline const juce::Identifier pitch{"pitch"};
+inline const juce::Identifier originalPitch{"originalPitch"};  // Chromatic pitch before scale quantization
 inline const juce::Identifier velocity{"velocity"};
 } // namespace IDs
 
@@ -54,9 +55,11 @@ class PatternModel : public juce::ValueTree::Listener
     void removeNote(int index);
     void removeNoteAt(double beat, int pitch, double tolerance = 0.01);
     void moveNote(int index, double newStartBeat, int newPitch);
+    void setNotePitchForScale(int index, int newPitch);  // Set pitch without changing originalPitch
     void resizeNote(int index, double newDuration);
     void setNoteVelocity(int index, int velocity);
     void clear();
+    int getOriginalPitch(int index) const;  // Get the chromatic pitch before scale quantization
 
     // Batch operations (grouped as single undo)
     void beginTransaction(const juce::String &name);

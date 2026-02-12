@@ -10,64 +10,45 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "core/PatternModel.h"
+#include "core/MusicTheory.h"
+#include "pianoroll/NoteSelection.h"
+#include "pianoroll/NoteEditor.h"
+#include "pianoroll/PianoRollRenderer.h"
 #include <functional>
-#include <set>
-#include <map>
 
 namespace SurgeBox
 {
 
 class SurgeBoxEngine;
 
-enum class ScaleType
-{
-    Chromatic,
-    Major,
-    NaturalMinor,
-    HarmonicMinor,
-    MelodicMinor,
-    Pentatonic,
-    PentatonicMinor,
-    Blues,
-    Dorian,
-    Phrygian,
-    Lydian,
-    Mixolydian,
-    Locrian
-};
-
-/**
- * Vertical piano roll with time flowing top-to-bottom.
- * Piano keys are horizontal at the TOP to align with Surge's keyboard.
- */
 class PianoRollWidget : public juce::Component
 {
   public:
     PianoRollWidget();
     ~PianoRollWidget() override;
 
-    void setEngine(SurgeBoxEngine *engine);
-    void setPatternModel(PatternModel *model);
+    void setEngine(SurgeBoxEngine* engine);
+    void setPatternModel(PatternModel* model);
     void setGridSize(double beats) { gridSize_ = beats; repaint(); }
     double getGridSize() const { return gridSize_; }
     double getPixelsPerBeat() const { return pixelsPerBeat_; }
     void setPixelsPerBeat(double ppb) { pixelsPerBeat_ = std::clamp(ppb, 15.0, 120.0); repaint(); }
 
-    void paint(juce::Graphics &g) override;
+    void paint(juce::Graphics& g) override;
     void resized() override;
 
-    void mouseDown(const juce::MouseEvent &e) override;
-    void mouseDrag(const juce::MouseEvent &e) override;
-    void mouseUp(const juce::MouseEvent &e) override;
-    void mouseMove(const juce::MouseEvent &e) override;
-    void mouseWheelMove(const juce::MouseEvent &e, const juce::MouseWheelDetails &wheel) override;
-    bool keyPressed(const juce::KeyPress &key) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
     // Selection
     void selectAll();
     void clearSelection();
     void deleteSelected();
-    bool hasSelection() const { return !selectedNotes_.empty(); }
+    bool hasSelection() const { return !selection_.empty(); }
 
     // Step recording
     using StepRecordCallback = std::function<void(int pitch, int velocity)>;
@@ -88,15 +69,13 @@ class PianoRollWidget : public juce::Component
     bool isNoteInScale(int pitch) const;
     const std::vector<int>& getVisiblePitches() const { return visiblePitches_; }
     int getVisibleNoteCount() const { return static_cast<int>(visiblePitches_.size()); }
-    int pitchToColumn(int pitch) const;
-    int columnToPitch(int column) const;
 
   private:
-    // Grid settings - vertical orientation
-    int lowestNote_{21};    // A0 (lowest piano key)
-    int highestNote_{108};  // C8 (highest piano key) - 88 keys like a piano
-    int noteWidth_{18};     // Width per pitch column (slightly narrower for more notes)
-    double pixelsPerBeat_{60.0};  // Default to zoomed in view
+    // Grid settings
+    int lowestNote_{21};
+    int highestNote_{108};
+    int noteWidth_{18};
+    double pixelsPerBeat_{60.0};
     double gridSize_{0.25};
 
     // Step recording
@@ -106,26 +85,22 @@ class PianoRollWidget : public juce::Component
     StepRecordCallback stepRecordCallback_;
 
     // Scale filtering
-    int scaleRoot_{0};  // 0=C, 1=C#, ... 11=B
+    int scaleRoot_{0};
     ScaleType scaleType_{ScaleType::Chromatic};
     std::vector<int> visiblePitches_;
     void rebuildVisiblePitches();
 
-    // Multi-selection
-    std::set<int> selectedNotes_;
+    // Selection and editing
+    PianoRoll::NoteSelection selection_;
+    PianoRoll::NoteEditor editor_;
 
-    // Editing state
+    // Dragging state
     int draggingNoteIndex_{-1};
     double dragStartBeat_{0.0};
     int dragStartPitch_{0};
     double dragStartDuration_{0.0};
     double originalNoteBeat_{0.0};
     int originalNotePitch_{0};
-
-    // Original positions of all selected notes for multi-note move
-    // Key is original (beat, pitch), value is duration - this survives index changes
-    struct OriginalNoteData { double beat; int pitch; double duration; int velocity; };
-    std::vector<OriginalNoteData> originalNotes_;
 
     enum class DragMode
     {
@@ -138,65 +113,35 @@ class PianoRollWidget : public juce::Component
         Erasing
     } dragMode_{DragMode::None};
 
-    // Track last drawn/erased position to avoid duplicates
     double lastDrawnBeat_{-1.0};
     int lastDrawnPitch_{-1};
-
     int playingNote_{-1};
-
-    // Box selection
     juce::Point<int> boxSelectStart_;
     juce::Point<int> boxSelectEnd_;
 
     // References
-    SurgeBoxEngine *engine_{nullptr};
-    PatternModel *patternModel_{nullptr};
+    SurgeBoxEngine* engine_{nullptr};
+    PatternModel* patternModel_{nullptr};
 
-    // Drawing helpers
-    void drawGrid(juce::Graphics &g, const juce::Rectangle<int> &area);
-    void drawNotes(juce::Graphics &g, const juce::Rectangle<int> &area);
-    void drawPlayhead(juce::Graphics &g, const juce::Rectangle<int> &area);
-    void drawPianoKeys(juce::Graphics &g, const juce::Rectangle<int> &area);
-    void drawStepCursor(juce::Graphics &g, const juce::Rectangle<int> &area);
-    void drawBoxSelection(juce::Graphics &g, const juce::Rectangle<int> &area);
+    // Sequencer playback highlighting
+    std::vector<uint8_t> sequencerPlayingNotes_;
 
-    // Coordinate conversion
-    std::pair<double, int> screenToNote(juce::Point<int> pos, const juce::Rectangle<int> &area);
-    juce::Rectangle<int> noteToScreen(int noteIndex, const juce::Rectangle<int> &area);
-    juce::Rectangle<int> getGridArea() const;
-    juce::Rectangle<int> getPianoArea() const;
+    // Helper to build render params
+    PianoRoll::RenderParams buildRenderParams() const;
 
-    // Selection helpers
-    bool isNoteSelected(int index) const { return selectedNotes_.count(index) > 0; }
-    void selectNotesInRect(const juce::Rectangle<int> &rect, const juce::Rectangle<int> &gridArea);
+    // Grid area (full widget now that piano keys are separate)
+    juce::Rectangle<int> getGridArea() const { return getLocalBounds(); }
 
-    // Note overlap handling
-    void removeOverlappingNotes(int pitch, double startBeat, double endBeat, int excludeIndex = -1);
+    // Coordinate helpers (delegating to renderer)
+    std::pair<double, int> screenToNote(juce::Point<int> pos);
+    juce::Rectangle<int> noteToScreen(int noteIndex);
+    int pitchToColumn(int pitch) const;
+    int columnToPitch(int column) const;
 
     // Piano interaction
     int getPitchAtX(int x) const;
     void playNote(int pitch);
     void stopNote(int pitch);
-
-    // Sequencer playback highlighting
-    std::vector<uint8_t> sequencerPlayingNotes_;
-
-    // Piano key is now a separate widget - this is kept for backwards compatibility
-    static constexpr int PIANO_KEY_HEIGHT = 0;
-
-    // Colors
-    juce::Colour bgColor_{0xff1a1a2e};
-    juce::Colour gridColor_{0xff2a2a4e};
-    juce::Colour beatLineColor_{0xff3a3a5e};
-    juce::Colour barLineColor_{0xff5a5a7e};
-    juce::Colour noteColor_{0xff00d4ff};
-    juce::Colour noteSelectedColor_{0xffff6b6b};
-    juce::Colour playheadColor_{0xffffffff};
-    juce::Colour whiteKeyColor_{0xffe8e8e8};
-    juce::Colour blackKeyColor_{0xff3a3a4e};
-    juce::Colour playingKeyColor_{0xff00d4ff};
-    juce::Colour stepCursorColor_{0xffff4444};
-    juce::Colour boxSelectColor_{0x4400d4ff};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoRollWidget)
 };

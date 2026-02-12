@@ -12,96 +12,70 @@
 namespace SurgeBox
 {
 
-TransportControls::TransportControls() { setOpaque(false); }
-
-void TransportControls::setEngine(SurgeBoxEngine *engine) { engine_ = engine; }
-
-void TransportControls::updateDisplay() { repaint(); }
-
-void TransportControls::paint(juce::Graphics &g)
+TransportControls::TransportControls()
 {
-    // Background
-    g.fillAll(bgColor_);
+    setOpaque(false);
 
-    bool isPlaying = engine_ && engine_->isPlaying();
+    playButton_ = std::make_unique<Widgets::IconButton>(Widgets::IconButton::Play);
+    playButton_->onClick = [this]() {
+        if (engine_)
+        {
+            engine_->play();
+            updateDisplay();
+        }
+    };
+    addAndMakeVisible(*playButton_);
 
-    // Play button
-    g.setColour(isPlaying ? playColor_ : buttonColor_);
-    g.fillRoundedRectangle(playBounds_.toFloat(), 4.0f);
-    g.setColour(textColor_);
+    stopButton_ = std::make_unique<Widgets::IconButton>(Widgets::IconButton::Stop);
+    stopButton_->onClick = [this]() {
+        if (engine_)
+        {
+            engine_->stop();
+            engine_->getSequencer().rewind();
+            updateDisplay();
+        }
+    };
+    addAndMakeVisible(*stopButton_);
 
-    // Play triangle
+    tempoField_ = std::make_unique<Widgets::NumberField>();
+    tempoField_->setRange(20, 300);
+    tempoField_->setSuffix(" BPM");
+    tempoField_->onValueChanged = [this](int tempo) {
+        if (engine_)
+        {
+            engine_->getProject().tempo = static_cast<double>(tempo);
+        }
+    };
+    addAndMakeVisible(*tempoField_);
+}
+
+void TransportControls::setEngine(SurgeBoxEngine *engine)
+{
+    engine_ = engine;
+    updateDisplay();
+}
+
+void TransportControls::updateDisplay()
+{
+    if (engine_)
     {
-        auto center = playBounds_.getCentre();
-        juce::Path triangle;
-        triangle.addTriangle(static_cast<float>(center.x - 6), static_cast<float>(center.y - 8),
-                            static_cast<float>(center.x - 6), static_cast<float>(center.y + 8),
-                            static_cast<float>(center.x + 8), static_cast<float>(center.y));
-        g.fillPath(triangle);
+        playButton_->setToggleState(engine_->isPlaying());
+        stopButton_->setToggleState(!engine_->isPlaying());
+        tempoField_->setValue(static_cast<int>(engine_->getProject().tempo));
     }
-
-    // Stop button
-    g.setColour(!isPlaying ? stopColor_.darker() : buttonColor_);
-    g.fillRoundedRectangle(stopBounds_.toFloat(), 4.0f);
-    g.setColour(textColor_);
-
-    // Stop square
-    {
-        auto center = stopBounds_.getCentre();
-        g.fillRect(center.x - 6, center.y - 6, 12, 12);
-    }
-
-    // Tempo display
-    g.setColour(buttonColor_);
-    g.fillRoundedRectangle(tempoBounds_.toFloat(), 4.0f);
-
-    double tempo = engine_ ? engine_->getProject().tempo : 120.0;
-    g.setColour(textColor_);
-    g.setFont(14.0f);
-    g.drawText(juce::String(static_cast<int>(tempo)) + " BPM", tempoBounds_,
-               juce::Justification::centred);
-
-    // Labels
-    g.setColour(textColor_.withAlpha(0.6f));
-    g.setFont(10.0f);
-    g.drawText("TRANSPORT", 0, getHeight() - 14, getWidth(), 14, juce::Justification::centred);
+    repaint();
 }
 
 void TransportControls::resized()
 {
     auto bounds = getLocalBounds().reduced(2);
-    bounds.removeFromBottom(16);
-
     int buttonSize = bounds.getHeight();
-    int tempoWidth = bounds.getWidth() - buttonSize * 2 - 8;
 
-    playBounds_ = bounds.removeFromLeft(buttonSize).reduced(2);
+    playButton_->setBounds(bounds.removeFromLeft(buttonSize).reduced(2));
     bounds.removeFromLeft(2);
-    stopBounds_ = bounds.removeFromLeft(buttonSize).reduced(2);
+    stopButton_->setBounds(bounds.removeFromLeft(buttonSize).reduced(2));
     bounds.removeFromLeft(4);
-    tempoBounds_ = bounds.reduced(2);
-}
-
-void TransportControls::mouseDown(const juce::MouseEvent &e)
-{
-    if (!engine_)
-        return;
-
-    if (playBounds_.contains(e.getPosition()))
-    {
-        engine_->play();
-        repaint();
-    }
-    else if (stopBounds_.contains(e.getPosition()))
-    {
-        engine_->stop();
-        engine_->getSequencer().rewind();
-        repaint();
-    }
-    else if (tempoBounds_.contains(e.getPosition()))
-    {
-        // TODO: Show tempo edit popup
-    }
+    tempoField_->setBounds(bounds.reduced(2));
 }
 
 } // namespace SurgeBox

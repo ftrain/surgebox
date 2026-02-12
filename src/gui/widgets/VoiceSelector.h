@@ -9,7 +9,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include "core/GrooveboxProject.h"
+#include "SurgeBoxWidgets.h"
 
 namespace SurgeBox
 {
@@ -24,19 +24,11 @@ class VoiceSelector : public juce::Component
 
     void setEngine(SurgeBoxEngine *engine);
 
-    void paint(juce::Graphics &g) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent &e) override;
 
   private:
     SurgeBoxEngine *engine_{nullptr};
-
-    std::array<juce::Rectangle<int>, NUM_VOICES> buttonBounds_;
-
-    juce::Colour bgColor_{0xff16213e};
-    juce::Colour buttonColor_{0xff1a1a2e};
-    juce::Colour activeColor_{0xff00d4ff};
-    juce::Colour textColor_{0xffffffff};
+    std::unique_ptr<Widgets::MultiSwitch> multiSwitch_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VoiceSelector)
 };

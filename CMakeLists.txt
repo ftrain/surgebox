@@ -48,6 +48,8 @@ add_library(surgebox-core STATIC
     src/core/PatternModel.h
     src/core/SurgeBoxEngine.cpp
     src/core/SurgeBoxEngine.h
+    src/core/MusicTheory.cpp
+    src/core/MusicTheory.h
 )
 
 target_include_directories(surgebox-core PUBLIC
@@ -102,18 +104,46 @@ juce_add_plugin(surgebox
 )
 
 target_sources(surgebox PRIVATE
+    # Plugin
     src/plugin/SurgeBoxProcessor.cpp
     src/plugin/SurgeBoxProcessor.h
     src/plugin/SurgeBoxEditor.cpp
     src/plugin/SurgeBoxEditor.h
-    src/gui/widgets/PianoRollWidget.cpp
-    src/gui/widgets/PianoRollWidget.h
-    src/gui/widgets/PianoKeyboardWidget.cpp
-    src/gui/widgets/PianoKeyboardWidget.h
+    src/plugin/CommandBar.cpp
+    src/plugin/CommandBar.h
+    src/plugin/MeasureControls.cpp
+    src/plugin/MeasureControls.h
+    # GUI - Core
+    src/gui/Theme.h
+    src/gui/Layout.h
+    src/gui/SurgeBoxLookAndFeel.h
+    # GUI - Widgets
+    src/gui/widgets/MultiSwitch.cpp
+    src/gui/widgets/MultiSwitch.h
+    src/gui/widgets/SelfDrawButton.cpp
+    src/gui/widgets/SelfDrawButton.h
+    src/gui/widgets/ToggleButton.cpp
+    src/gui/widgets/ToggleButton.h
+    src/gui/widgets/NumberField.cpp
+    src/gui/widgets/NumberField.h
+    src/gui/widgets/IconButton.cpp
+    src/gui/widgets/IconButton.h
+    src/gui/widgets/SurgeBoxWidgets.h
     src/gui/widgets/VoiceSelector.cpp
     src/gui/widgets/VoiceSelector.h
     src/gui/widgets/TransportControls.cpp
     src/gui/widgets/TransportControls.h
+    src/gui/widgets/PianoKeyboardWidget.cpp
+    src/gui/widgets/PianoKeyboardWidget.h
+    # GUI - Piano Roll
+    src/gui/widgets/PianoRollWidget.cpp
+    src/gui/widgets/PianoRollWidget.h
+    src/gui/widgets/pianoroll/PianoRollRenderer.cpp
+    src/gui/widgets/pianoroll/PianoRollRenderer.h
+    src/gui/widgets/pianoroll/NoteSelection.cpp
+    src/gui/widgets/pianoroll/NoteSelection.h
+    src/gui/widgets/pianoroll/NoteEditor.cpp
+    src/gui/widgets/pianoroll/NoteEditor.h
 )
 
 target_include_directories(surgebox PRIVATE

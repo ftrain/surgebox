@@ -10,78 +10,42 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SurgeBoxProcessor.h"
+#include "CommandBar.h"
 #include "gui/widgets/PianoRollWidget.h"
 #include "gui/widgets/PianoKeyboardWidget.h"
-#include "gui/widgets/VoiceSelector.h"
-#include "gui/widgets/TransportControls.h"
 #include "gui/SurgeBoxLookAndFeel.h"
+#include "gui/Layout.h"
 
 class SurgeBoxEditor : public juce::AudioProcessorEditor,
                        public juce::Timer,
-                       public juce::Button::Listener,
-                       public juce::ComboBox::Listener,
-                       public juce::Slider::Listener,
                        public juce::MidiKeyboardState::Listener,
                        public juce::ScrollBar::Listener
 {
   public:
-    explicit SurgeBoxEditor(SurgeBoxProcessor &);
+    explicit SurgeBoxEditor(SurgeBoxProcessor&);
     ~SurgeBoxEditor() override;
 
-    void paint(juce::Graphics &) override;
+    void paint(juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
-    void buttonClicked(juce::Button *button) override;
-    void comboBoxChanged(juce::ComboBox *comboBox) override;
-    void sliderValueChanged(juce::Slider *slider) override;
-    bool keyPressed(const juce::KeyPress &key) override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
     // MidiKeyboardState::Listener - captures notes for step recording
-    void handleNoteOn(juce::MidiKeyboardState *, int midiChannel, int midiNoteNumber,
+    void handleNoteOn(juce::MidiKeyboardState*, int midiChannel, int midiNoteNumber,
                       float velocity) override;
-    void handleNoteOff(juce::MidiKeyboardState *, int midiChannel, int midiNoteNumber,
+    void handleNoteOff(juce::MidiKeyboardState*, int midiChannel, int midiNoteNumber,
                        float velocity) override;
 
     // ScrollBar::Listener
-    void scrollBarMoved(juce::ScrollBar *scrollBar, double newRangeStart) override;
+    void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
 
   private:
-    SurgeBoxProcessor &processor_;
-    SurgeBox::SurgeBoxEngine &engine_;
+    SurgeBoxProcessor& processor_;
+    SurgeBox::SurgeBoxEngine& engine_;
 
-    // UI Components
-    std::unique_ptr<SurgeBox::VoiceSelector> voiceSelector_;
-    std::unique_ptr<SurgeBox::TransportControls> transport_;
-
-    // Step record button
-    std::unique_ptr<juce::TextButton> stepRecordButton_;
+    // Command bar
+    std::unique_ptr<SurgeBox::CommandBar> commandBar_;
     bool stepRecordEnabled_{false};
-
-    // Measure control buttons
-    std::unique_ptr<juce::TextButton> measuresDoubleBtn_;
-    std::unique_ptr<juce::TextButton> measuresHalfBtn_;
-    std::unique_ptr<juce::TextButton> measuresAddBtn_;
-    std::unique_ptr<juce::TextButton> measuresSubBtn_;
-    std::unique_ptr<juce::Label> measuresLabel_;
-
-    // Grid size dropdown
-    std::unique_ptr<juce::ComboBox> gridSizeCombo_;
-    std::unique_ptr<juce::Label> gridSizeLabel_;
-
-    // Scale picker
-    std::unique_ptr<juce::ComboBox> scaleRootCombo_;
-    std::unique_ptr<juce::ComboBox> scaleTypeCombo_;
-    std::unique_ptr<juce::Label> scaleLabel_;
-
-    // Clear pattern button
-    std::unique_ptr<juce::TextButton> clearPatternBtn_;
-
-    // Tempo control
-    std::unique_ptr<juce::Slider> tempoSlider_;
-    std::unique_ptr<juce::Label> tempoLabel_;
-
-    // Tempo multiplier (speed control)
-    std::unique_ptr<juce::ComboBox> tempoMultiplierCombo_;
 
     // Surge editor in scrollable viewport
     std::unique_ptr<juce::Viewport> surgeViewport_;
@@ -95,34 +59,19 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     std::unique_ptr<SurgeBox::PianoKeyboardWidget> pianoKeyboard_;
     int pianoRollHeight_{300};
     bool draggingDivider_{false};
-    static constexpr int PIANO_KEYBOARD_HEIGHT = 30;
-
-    // Layout: Surge → Command bar → Piano Roll
-    static constexpr int COMMAND_BAR_HEIGHT = 44;
-    static constexpr int DIVIDER_HEIGHT = 6;
-    static constexpr int MIN_PIANO_ROLL_HEIGHT = 150;
-    static constexpr int MIN_SYNTH_HEIGHT = 200;
 
     void rebuildSurgeEditor();
     void onVoiceChanged(int voice);
     void updateKeyboardListener();
     void updateSurgeEditorScale();
-    void updateMeasuresLabel();
-    // SurgeBox look-and-feel
+
     SurgeBox::SurgeBoxLookAndFeel lookAndFeel_;
 
-    // Measure operations
-    void doubleMeasures();
-    void halveMeasures();
-    void addMeasure();
-    void subtractMeasure();
-    void clearPattern();
-
     // Mouse handling for divider
-    void mouseDown(const juce::MouseEvent &e) override;
-    void mouseDrag(const juce::MouseEvent &e) override;
-    void mouseUp(const juce::MouseEvent &e) override;
-    void mouseMove(const juce::MouseEvent &e) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
     juce::Rectangle<int> getDividerBounds() const;
     juce::Rectangle<int> getCommandBarBounds() const;
 
