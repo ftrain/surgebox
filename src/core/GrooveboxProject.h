@@ -19,8 +19,11 @@
 
 class TiXmlElement;
 class TiXmlDocument;
-class SurgeStorage;
-class SurgeSynthesizer;
+
+namespace juce
+{
+class AudioProcessor;
+} // namespace juce
 
 namespace SurgeBox
 {
@@ -28,6 +31,17 @@ namespace SurgeBox
 static constexpr int NUM_VOICES = 4;
 static constexpr int NUM_GLOBAL_FX = 4;
 static constexpr int FX_PARAMS_PER_SLOT = 12;
+
+// ============================================================================
+// Instrument Types
+// ============================================================================
+
+enum class InstrumentType : int
+{
+    SurgeXT = 0,
+    Dexed = 1,
+    TR808 = 2
+};
 
 // ============================================================================
 // File Format
@@ -44,7 +58,7 @@ struct ProjectHeader
 };
 #pragma pack(pop)
 
-static constexpr uint32_t PROJECT_FORMAT_VERSION = 1;
+static constexpr uint32_t PROJECT_FORMAT_VERSION = 2;
 
 // ============================================================================
 // MIDI Note
@@ -121,6 +135,7 @@ struct VoiceState
     std::string name;
     std::vector<char> patchData;
     Pattern pattern;
+    InstrumentType instrumentType{InstrumentType::SurgeXT};
 
     float volume{1.0f};
     float pan{0.0f};
@@ -138,8 +153,8 @@ struct VoiceState
     void toXML(TiXmlElement *parent, int index) const;
     void fromXML(TiXmlElement *element, int index);
 
-    void captureFromSynth(SurgeSynthesizer *synth);
-    void restoreToSynth(SurgeSynthesizer *synth);
+    void captureFromProcessor(juce::AudioProcessor *proc);
+    void restoreToProcessor(juce::AudioProcessor *proc);
 };
 
 // ============================================================================

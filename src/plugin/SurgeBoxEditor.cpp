@@ -8,6 +8,7 @@
 
 #include "SurgeBoxEditor.h"
 #include "SurgeSynthEditor.h"
+#include "SurgeSynthProcessor.h"
 #include "gui/Theme.h"
 #include "gui/Layout.h"
 
@@ -49,10 +50,29 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
         resized();
     };
 
-    // Create scrollable viewport for Surge editor
-    surgeViewport_ = std::make_unique<juce::Viewport>();
-    surgeViewport_->setScrollBarsShown(true, false);
-    addAndMakeVisible(*surgeViewport_);
+    commandBar_->onMasterFXToggled = [this](bool show) {
+        showMasterFXEditor(show);
+    };
+
+    commandBar_->onInstrumentChanged = [this](SurgeBox::InstrumentType type) {
+        int voice = engine_.getActiveVoice();
+        processor_.switchInstrument(voice, type);
+
+        // Exit master FX view when switching instruments
+        if (showingMasterFX_)
+            showMasterFXEditor(false);
+        else
+            rebuildInstrumentEditor();
+
+        // Force rebuild since the processor changed
+        currentEditorVoice_ = -1;
+        rebuildInstrumentEditor();
+    };
+
+    // Create scrollable viewport for instrument editor
+    instrumentViewport_ = std::make_unique<juce::Viewport>();
+    instrumentViewport_->setScrollBarsShown(true, false);
+    addAndMakeVisible(*instrumentViewport_);
 
     // Create scrollable viewport for piano roll
     pianoRollViewport_ = std::make_unique<juce::Viewport>();
@@ -69,19 +89,15 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
     pianoKeyboard_ = std::make_unique<SurgeBox::PianoKeyboardWidget>();
     addAndMakeVisible(*pianoKeyboard_);
 
-    // Wire up keyboard note preview callbacks
+    // Wire up keyboard note preview callbacks (instrument-agnostic via sendNoteToActiveVoice)
     pianoKeyboard_->onNoteOn = [this](int pitch, int velocity) {
-        auto* synth = engine_.getActiveSynth();
-        if (synth)
-            synth->playNote(0, pitch, velocity, 0, -1);
+        engine_.sendNoteToActiveVoice(pitch, velocity, true);
 
         if (stepRecordEnabled_ && pianoRoll_)
             pianoRoll_->addNoteAtCurrentStep(pitch, velocity);
     };
     pianoKeyboard_->onNoteOff = [this](int pitch) {
-        auto* synth = engine_.getActiveSynth();
-        if (synth)
-            synth->releaseNote(0, pitch, 0);
+        engine_.sendNoteToActiveVoice(pitch, 0, false);
     };
 
     // Listen to viewport scroll changes to sync keyboard
@@ -99,7 +115,7 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
     setResizeLimits(800, 500, 2400, 1600);
     setSize(1200, 800);
 
-    rebuildSurgeEditor();
+    rebuildInstrumentEditor();
     updateKeyboardListener();
 
     startTimerHz(30);
@@ -128,18 +144,19 @@ SurgeBoxEditor::~SurgeBoxEditor()
 
     setLookAndFeel(nullptr);
 
+    // Remove keyboard listeners from Surge processors
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
     {
-        auto* proc = processor_.getProcessor(i);
-        if (proc)
-            proc->midiKeyboardState.removeListener(this);
+        auto* surgeProc = processor_.getSurgeProcessor(i);
+        if (surgeProc)
+            surgeProc->midiKeyboardState.removeListener(this);
     }
 
-    if (surgeEditor_)
+    if (instrumentEditor_)
     {
-        surgeViewport_->setViewedComponent(nullptr, false);
-        surgeEditorWrapper_.reset();
-        surgeEditor_.reset();
+        instrumentViewport_->setViewedComponent(nullptr, false);
+        instrumentEditorWrapper_.reset();
+        instrumentEditor_.reset();
     }
 
     pianoRollViewport_->setViewedComponent(nullptr, false);
@@ -147,13 +164,14 @@ SurgeBoxEditor::~SurgeBoxEditor()
 
 void SurgeBoxEditor::updateKeyboardListener()
 {
+    // Attach keyboard state listeners to Surge processors (for step recording via Surge's keyboard)
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
     {
-        auto* proc = processor_.getProcessor(i);
-        if (proc)
+        auto* surgeProc = processor_.getSurgeProcessor(i);
+        if (surgeProc)
         {
-            proc->midiKeyboardState.removeListener(this);
-            proc->midiKeyboardState.addListener(this);
+            surgeProc->midiKeyboardState.removeListener(this);
+            surgeProc->midiKeyboardState.addListener(this);
         }
     }
 }
@@ -220,7 +238,7 @@ void SurgeBoxEditor::resized()
 
     commandBar_->setBounds(commandBarArea);
 
-    surgeViewport_->setBounds(bounds);
+    instrumentViewport_->setBounds(bounds);
 
     auto keyboardArea = pianoRollArea.removeFromTop(SurgeBox::Layout::PIANO_KEYBOARD_HEIGHT);
     pianoKeyboard_->setBounds(keyboardArea);
@@ -241,7 +259,7 @@ void SurgeBoxEditor::resized()
     pianoKeyboard_->setVisiblePitches(pianoRoll_->getVisiblePitches());
     pianoKeyboard_->setScrollOffset(pianoRollViewport_->getViewPositionX());
 
-    updateSurgeEditorScale();
+    updateInstrumentEditorScale();
 
     pianoRoll_->setStepRecordEnabled(stepRecordEnabled_);
 }
@@ -352,63 +370,64 @@ void SurgeBoxEditor::mouseMove(const juce::MouseEvent& e)
     }
 }
 
-void SurgeBoxEditor::rebuildSurgeEditor()
+void SurgeBoxEditor::rebuildInstrumentEditor()
 {
     int newVoice = engine_.getActiveVoice();
 
-    if (newVoice == currentSurgeVoice_ && surgeEditor_)
+    if (newVoice == currentEditorVoice_ && instrumentEditor_)
         return;
 
-    if (surgeEditor_)
+    if (instrumentEditor_)
     {
-        surgeViewport_->setViewedComponent(nullptr, false);
-        surgeEditorWrapper_.reset();
-        surgeEditor_.reset();
+        instrumentViewport_->setViewedComponent(nullptr, false);
+        instrumentEditorWrapper_.reset();
+        instrumentEditor_.reset();
     }
 
-    auto* surgeProcessor = processor_.getProcessor(newVoice);
-    if (surgeProcessor)
+    auto* proc = processor_.getProcessor(newVoice);
+    if (proc)
     {
-        surgeEditor_.reset(surgeProcessor->createEditor());
+        instrumentEditor_.reset(proc->createEditor());
 
-        if (surgeEditor_)
+        if (instrumentEditor_)
         {
-            if (auto* surgeSynthEditor = dynamic_cast<SurgeSynthEditor*>(surgeEditor_.get()))
+            // For Surge XT editors, disable extended controls
+            if (auto* surgeSynthEditor = dynamic_cast<SurgeSynthEditor*>(instrumentEditor_.get()))
             {
                 surgeSynthEditor->drawExtendedControls = false;
                 surgeSynthEditor->resized();
             }
 
-            surgeEditorWrapper_ = std::make_unique<juce::Component>();
-            surgeEditorWrapper_->addAndMakeVisible(*surgeEditor_);
+            instrumentEditorWrapper_ = std::make_unique<juce::Component>();
+            instrumentEditorWrapper_->addAndMakeVisible(*instrumentEditor_);
 
-            surgeViewport_->setViewedComponent(surgeEditorWrapper_.get(), false);
-            currentSurgeVoice_ = newVoice;
+            instrumentViewport_->setViewedComponent(instrumentEditorWrapper_.get(), false);
+            currentEditorVoice_ = newVoice;
 
-            updateSurgeEditorScale();
+            updateInstrumentEditorScale();
         }
     }
 }
 
-void SurgeBoxEditor::updateSurgeEditorScale()
+void SurgeBoxEditor::updateInstrumentEditorScale()
 {
-    if (!surgeEditor_ || !surgeEditorWrapper_)
+    if (!instrumentEditor_ || !instrumentEditorWrapper_)
         return;
 
-    int viewportWidth = surgeViewport_->getWidth();
-    int editorWidth = surgeEditor_->getWidth();
-    int editorHeight = surgeEditor_->getHeight();
+    int viewportWidth = instrumentViewport_->getWidth();
+    int editorWidth = instrumentEditor_->getWidth();
+    int editorHeight = instrumentEditor_->getHeight();
 
     if (viewportWidth > 0 && editorWidth > 0)
     {
         float scale = static_cast<float>(viewportWidth) / static_cast<float>(editorWidth);
 
-        surgeEditor_->setTransform(juce::AffineTransform::scale(scale));
+        instrumentEditor_->setTransform(juce::AffineTransform::scale(scale));
 
         int scaledHeight = static_cast<int>(editorHeight * scale);
-        surgeEditorWrapper_->setSize(viewportWidth, scaledHeight);
+        instrumentEditorWrapper_->setSize(viewportWidth, scaledHeight);
 
-        surgeEditor_->setBounds(0, 0, editorWidth, editorHeight);
+        instrumentEditor_->setBounds(0, 0, editorWidth, editorHeight);
     }
 }
 
@@ -421,8 +440,47 @@ void SurgeBoxEditor::onVoiceChanged(int voice)
 
     double multiplier = engine_.getProject().voices[voice].tempoMultiplier.load();
     commandBar_->updateTempoMultiplier(multiplier);
+    commandBar_->updateInstrumentSelector();
 
-    rebuildSurgeEditor();
+    // If showing master FX, keep it visible; otherwise rebuild instrument editor
+    if (!showingMasterFX_)
+        rebuildInstrumentEditor();
+
     commandBar_->getVoiceSelector().repaint();
     resized();
+}
+
+void SurgeBoxEditor::showMasterFXEditor(bool show)
+{
+    showingMasterFX_ = show;
+
+    if (show)
+    {
+        // Remove instrument editor from viewport
+        if (instrumentEditor_)
+        {
+            instrumentViewport_->setViewedComponent(nullptr, false);
+            instrumentEditorWrapper_.reset();
+            instrumentEditor_.reset();
+            currentEditorVoice_ = -1;
+        }
+
+        // Create master FX editor and show in viewport
+        if (!masterFXEditor_)
+            masterFXEditor_ = std::make_unique<SurgeBox::MasterFXEditor>(engine_.getMasterFXChain());
+
+        masterFXEditor_->refreshFromChain();
+        masterFXEditor_->setSize(instrumentViewport_->getWidth(),
+                                  std::max(400, instrumentViewport_->getHeight()));
+        instrumentViewport_->setViewedComponent(masterFXEditor_.get(), false);
+    }
+    else
+    {
+        // Remove master FX editor
+        instrumentViewport_->setViewedComponent(nullptr, false);
+        masterFXEditor_.reset();
+
+        // Restore instrument editor
+        rebuildInstrumentEditor();
+    }
 }

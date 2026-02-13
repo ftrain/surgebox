@@ -8,65 +8,87 @@
 
 #include "SurgeBoxProcessor.h"
 #include "SurgeBoxEditor.h"
-#include "SurgeSynthesizer.h"
+#include "SurgeSynthProcessor.h"
+#include "core/TR808Processor.h"
+#include "DexedFactory.h" // createDexedProcessor()
 
 SurgeBoxProcessor::SurgeBoxProcessor()
     : AudioProcessor(BusesProperties()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)
                          .withInput("Input", juce::AudioChannelSet::stereo(), true))
 {
-    // Create the Surge processor instances
+    // Create initial Surge XT processor instances for all voices
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
     {
-        surgeProcessors_[i] = std::make_unique<SurgeSynthProcessor>();
+        instrumentTypes_[i] = SurgeBox::InstrumentType::SurgeXT;
+        processors_[i] = createInstrument(SurgeBox::InstrumentType::SurgeXT);
     }
 }
 
 SurgeBoxProcessor::~SurgeBoxProcessor()
 {
-    // Shutdown engine first - this clears all callbacks and synth pointers
+    // Shutdown engine first - this clears all callbacks and processor pointers
     engine_.shutdown();
 
-    // Release Surge processors in REVERSE order to avoid issues with shared
+    // Release processors in REVERSE order to avoid issues with shared
     // global state. Surge uses shared lookandfeels and other resources that
     // may have dependencies on the first-created instance.
     for (int i = SurgeBox::NUM_VOICES - 1; i >= 0; i--)
     {
-        if (surgeProcessors_[i])
+        if (processors_[i])
         {
             // Call releaseResources to ensure proper cleanup of audio resources
-            surgeProcessors_[i]->releaseResources();
-            surgeProcessors_[i].reset();
+            processors_[i]->releaseResources();
+            processors_[i].reset();
         }
     }
 }
 
+std::unique_ptr<juce::AudioProcessor> SurgeBoxProcessor::createInstrument(SurgeBox::InstrumentType type)
+{
+    switch (type)
+    {
+        case SurgeBox::InstrumentType::SurgeXT:
+            return std::make_unique<SurgeSynthProcessor>();
+
+        case SurgeBox::InstrumentType::TR808:
+            return std::make_unique<SurgeBox::TR808Processor>();
+
+        case SurgeBox::InstrumentType::Dexed:
+            return createDexedProcessor();
+    }
+    return std::make_unique<SurgeSynthProcessor>();
+}
+
 void SurgeBoxProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // Prepare all Surge processors and pass them to engine
-    std::array<SurgeSynthProcessor *, SurgeBox::NUM_VOICES> procPtrs{};
+    currentSampleRate_ = sampleRate;
+    currentBlockSize_ = samplesPerBlock;
+
+    // Prepare all processors and pass them to engine
+    std::array<juce::AudioProcessor *, SurgeBox::NUM_VOICES> procPtrs{};
 
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
     {
-        if (surgeProcessors_[i])
+        if (processors_[i])
         {
-            surgeProcessors_[i]->prepareToPlay(sampleRate, samplesPerBlock);
-            procPtrs[i] = surgeProcessors_[i].get();
+            processors_[i]->prepareToPlay(sampleRate, samplesPerBlock);
+            procPtrs[i] = processors_[i].get();
         }
     }
 
-    // Pass processor pointers to engine (it will use processBlock to handle GUI keyboard)
-    engine_.setProcessors(procPtrs);
+    // Pass processor pointers to engine
+    engine_.setProcessors(procPtrs, instrumentTypes_);
     engine_.initialize(sampleRate, samplesPerBlock);
 }
 
 void SurgeBoxProcessor::releaseResources()
 {
-    // Shutdown engine (clears callbacks and synth pointers)
+    // Shutdown engine (clears callbacks and processor pointers)
     engine_.shutdown();
 
     // Release resources on each processor
-    for (auto &proc : surgeProcessors_)
+    for (auto &proc : processors_)
     {
         if (proc)
             proc->releaseResources();
@@ -79,36 +101,25 @@ void SurgeBoxProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mid
 
     int numSamples = buffer.getNumSamples();
 
-    // Handle incoming MIDI
+    // Handle incoming MIDI - route to active voice via lock-free queue
     for (const auto metadata : midiMessages)
     {
         auto msg = metadata.getMessage();
 
-        // Route MIDI to active voice
-        auto *synth = engine_.getActiveSynth();
-        if (!synth)
-            continue;
-
         if (msg.isNoteOn())
         {
-            synth->playNote(msg.getChannel() - 1, msg.getNoteNumber(), msg.getVelocity(), 0, -1);
+            engine_.sendNoteToActiveVoice(msg.getNoteNumber(), msg.getVelocity(), true);
         }
         else if (msg.isNoteOff())
         {
-            synth->releaseNote(msg.getChannel() - 1, msg.getNoteNumber(), msg.getVelocity());
+            engine_.sendNoteToActiveVoice(msg.getNoteNumber(), 0, false);
         }
         else if (msg.isAllNotesOff() || msg.isAllSoundOff())
         {
-            synth->allNotesOff();
-        }
-        else if (msg.isPitchWheel())
-        {
-            synth->pitchBend(msg.getChannel() - 1, msg.getPitchWheelValue() - 8192);
-        }
-        else if (msg.isController())
-        {
-            synth->channelController(msg.getChannel() - 1, msg.getControllerNumber(),
-                                     msg.getControllerValue());
+            // Send note-off for all 128 notes is overkill;
+            // for now just silence the active voice
+            for (int n = 0; n < 128; n++)
+                engine_.sendNoteToActiveVoice(n, 0, false);
         }
     }
 
@@ -134,11 +145,54 @@ juce::AudioProcessorEditor *SurgeBoxProcessor::createEditor()
     return new SurgeBoxEditor(*this);
 }
 
-SurgeSynthProcessor *SurgeBoxProcessor::getProcessor(int voice)
+juce::AudioProcessor *SurgeBoxProcessor::getProcessor(int voice)
 {
     if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
         return nullptr;
-    return surgeProcessors_[voice].get();
+    return processors_[voice].get();
+}
+
+SurgeSynthProcessor *SurgeBoxProcessor::getSurgeProcessor(int voice)
+{
+    if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
+        return nullptr;
+    if (instrumentTypes_[voice] != SurgeBox::InstrumentType::SurgeXT)
+        return nullptr;
+    return dynamic_cast<SurgeSynthProcessor *>(processors_[voice].get());
+}
+
+void SurgeBoxProcessor::switchInstrument(int voice, SurgeBox::InstrumentType newType)
+{
+    if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
+        return;
+    if (instrumentTypes_[voice] == newType)
+        return;
+
+    // Mark voice as not ready (audio thread will skip it)
+    engine_.setVoiceReady(voice, false);
+
+    // Create new processor on message thread
+    auto newProc = createInstrument(newType);
+    if (newProc)
+        newProc->prepareToPlay(currentSampleRate_, currentBlockSize_);
+
+    // Swap processor
+    auto oldProc = std::move(processors_[voice]);
+    processors_[voice] = std::move(newProc);
+    instrumentTypes_[voice] = newType;
+
+    // Update engine's pointer
+    std::array<juce::AudioProcessor *, SurgeBox::NUM_VOICES> procPtrs{};
+    for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
+        procPtrs[i] = processors_[i].get();
+    engine_.setProcessors(procPtrs, instrumentTypes_);
+
+    // Mark voice as ready again
+    engine_.setVoiceReady(voice, true);
+
+    // Cleanup old processor (safe now since audio thread won't use it)
+    if (oldProc)
+        oldProc->releaseResources();
 }
 
 void SurgeBoxProcessor::getStateInformation(juce::MemoryBlock &destData)
@@ -176,6 +230,14 @@ void SurgeBoxProcessor::setStateInformation(const void *data, int sizeInBytes)
 
         if (engine_.getProject().loadFromFile(tempPath))
         {
+            // Restore instrument types and recreate processors if needed
+            for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
+            {
+                auto loadedType = engine_.getProject().voices[i].instrumentType;
+                if (loadedType != instrumentTypes_[i])
+                    switchInstrument(i, loadedType);
+            }
+
             engine_.restoreAllVoices();
         }
         fs::remove(tempPath);

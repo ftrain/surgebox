@@ -7,9 +7,9 @@
  */
 
 #include "GrooveboxProject.h"
-#include "SurgeSynthesizer.h"
 #include "tinyxml/tinyxml.h"
 #include "sst/basic-blocks/mechanics/endian-ops.h"
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <fmt/core.h>
 
 #include <algorithm>
@@ -211,6 +211,7 @@ VoiceState::VoiceState(const VoiceState &other)
     : name(other.name),
       patchData(other.patchData),
       pattern(other.pattern),
+      instrumentType(other.instrumentType),
       volume(other.volume),
       pan(other.pan),
       sendA(other.sendA),
@@ -229,6 +230,7 @@ VoiceState &VoiceState::operator=(const VoiceState &other)
         name = other.name;
         patchData = other.patchData;
         pattern = other.pattern;
+        instrumentType = other.instrumentType;
         volume = other.volume;
         pan = other.pan;
         sendA = other.sendA;
@@ -241,11 +243,34 @@ VoiceState &VoiceState::operator=(const VoiceState &other)
     return *this;
 }
 
+static const char *instrumentTypeToString(InstrumentType type)
+{
+    switch (type)
+    {
+        case InstrumentType::SurgeXT: return "surgext";
+        case InstrumentType::Dexed: return "dexed";
+        case InstrumentType::TR808: return "tr808";
+    }
+    return "surgext";
+}
+
+static InstrumentType instrumentTypeFromString(const char *str)
+{
+    if (!str)
+        return InstrumentType::SurgeXT;
+    if (std::strcmp(str, "dexed") == 0)
+        return InstrumentType::Dexed;
+    if (std::strcmp(str, "tr808") == 0)
+        return InstrumentType::TR808;
+    return InstrumentType::SurgeXT;
+}
+
 void VoiceState::toXML(TiXmlElement *parent, int index) const
 {
     TiXmlElement voiceEl("voice");
     voiceEl.SetAttribute("index", index);
     voiceEl.SetAttribute("name", name.c_str());
+    voiceEl.SetAttribute("instrument", instrumentTypeToString(instrumentType));
 
     // Mixer
     TiXmlElement mixerEl("mixer");
@@ -285,6 +310,8 @@ void VoiceState::fromXML(TiXmlElement *element, int /*index*/)
 {
     if (const char *nameAttr = element->Attribute("name"))
         name = nameAttr;
+
+    instrumentType = instrumentTypeFromString(element->Attribute("instrument"));
 
     if (TiXmlElement *mixerEl = element->FirstChildElement("mixer"))
     {
@@ -329,31 +356,26 @@ void VoiceState::fromXML(TiXmlElement *element, int /*index*/)
         pattern.fromXML(patternEl);
 }
 
-void VoiceState::captureFromSynth(SurgeSynthesizer *synth)
+void VoiceState::captureFromProcessor(juce::AudioProcessor *proc)
 {
-    if (!synth)
+    if (!proc)
         return;
 
-    void *data = nullptr;
-    size_t size = synth->saveRaw(&data);
+    juce::MemoryBlock mb;
+    proc->getStateInformation(mb);
 
-    if (data && size > 0)
+    if (mb.getSize() > 0)
     {
-        patchData.resize(size);
-        memcpy(patchData.data(), data, size);
-        free(data);
+        patchData.resize(mb.getSize());
+        memcpy(patchData.data(), mb.getData(), mb.getSize());
     }
-
-    name = synth->storage.getPatch().name;
-    if (name.empty())
-        name = "Voice";
 }
 
-void VoiceState::restoreToSynth(SurgeSynthesizer *synth)
+void VoiceState::restoreToProcessor(juce::AudioProcessor *proc)
 {
-    if (!synth || patchData.empty())
+    if (!proc || patchData.empty())
         return;
-    synth->loadRaw(patchData.data(), patchData.size(), true);
+    proc->setStateInformation(patchData.data(), static_cast<int>(patchData.size()));
 }
 
 // ============================================================================
@@ -572,6 +594,7 @@ bool GrooveboxProject::loadFromFile(const fs::path &path)
     uint32_t version = mech::endian_read_int32LE(header.version);
     if (version > PROJECT_FORMAT_VERSION)
         return false;
+    // v1 files have no instrument attribute on voices - defaults to SurgeXT via fromXML
 
     uint32_t xmlsize = mech::endian_read_int32LE(header.xmlsize);
 

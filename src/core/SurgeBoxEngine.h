@@ -10,28 +10,20 @@
 
 #include "GrooveboxProject.h"
 #include "PatternModel.h"
-#include "SurgeSynthesizer.h"
+#include "MasterFXChain.h"
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_data_structures/juce_data_structures.h>
 #include <array>
 #include <memory>
 #include <atomic>
 #include <functional>
 
-// Forward declarations
-class SurgeSynthProcessor;
-
-namespace juce
-{
-template <typename T>
-class AudioBuffer;
-} // namespace juce
-
 namespace SurgeBox
 {
 
 // ============================================================================
-// Sequencer Engine - Playback control
+// Sequencer Engine - Playback control (instrument-agnostic, MIDI-buffer based)
 // ============================================================================
 
 class SequencerEngine
@@ -40,7 +32,6 @@ class SequencerEngine
     SequencerEngine();
 
     void setProject(GrooveboxProject *project);
-    void setSynths(std::array<SurgeSynthesizer *, NUM_VOICES> synths);
 
     void play();
     void stop();
@@ -69,9 +60,10 @@ class SequencerEngine
                                    int baseSampleOffset = 0);
 
     GrooveboxProject *project_{nullptr};
-    std::array<SurgeSynthesizer *, NUM_VOICES> synths_{};
 
     std::atomic<bool> playing_{false};
+    std::atomic<bool> pendingStop_{false};
+    std::atomic<double> pendingPositionJump_{-1.0};
     std::atomic<double> currentBeat_{0.0};
     double sampleRate_{44100.0};
     double beatsPerSample_{0.0};
@@ -88,8 +80,20 @@ class SequencerEngine
 };
 
 // ============================================================================
+// Pending note event for UI -> audio thread communication
+// ============================================================================
+
+struct PendingNoteEvent
+{
+    int voiceIndex;
+    uint8_t pitch;
+    uint8_t velocity;
+    bool noteOn;
+};
+
+// ============================================================================
 // SurgeBox Engine - Multi-instance manager
-// Uses SurgeSynthProcessor to properly handle GUI keyboard input
+// Works with any juce::AudioProcessor (Surge XT, Dexed, TR-808, etc.)
 // ============================================================================
 
 class SurgeBoxEngine
@@ -99,7 +103,8 @@ class SurgeBoxEngine
     ~SurgeBoxEngine();
 
     // Initialization - processors are injected from plugin layer
-    void setProcessors(std::array<SurgeSynthProcessor *, NUM_VOICES> processors);
+    void setProcessors(std::array<juce::AudioProcessor *, NUM_VOICES> processors,
+                       std::array<InstrumentType, NUM_VOICES> types);
     bool initialize(double sampleRate, int blockSize);
     void shutdown();
 
@@ -110,9 +115,15 @@ class SurgeBoxEngine
     int getActiveVoice() const { return activeVoice_; }
     void setActiveVoice(int voice);
 
-    // Access to synths (via processors)
-    SurgeSynthesizer *getSynth(int voice);
-    SurgeSynthesizer *getActiveSynth() { return getSynth(activeVoice_); }
+    // Instrument type for a voice
+    InstrumentType getInstrumentType(int voice) const;
+
+    // Generic processor access (for UI editor creation)
+    juce::AudioProcessor *getProcessor(int voice);
+    juce::AudioProcessor *getActiveProcessor() { return getProcessor(activeVoice_); }
+
+    // Send note from UI thread (queued for audio thread consumption)
+    void sendNoteToActiveVoice(int pitch, int velocity, bool noteOn);
 
     // Project
     GrooveboxProject &getProject() { return project_; }
@@ -150,11 +161,18 @@ class SurgeBoxEngine
     std::vector<uint8_t> getPlayingNotes(int voice) const { return sequencer_.getPlayingNotes(voice); }
     std::vector<uint8_t> getActivePlayingNotes() const { return getPlayingNotes(activeVoice_); }
 
-    // Capture current state of all synths into project
+    // Capture current state of all processors into project
     void captureAllVoices();
 
-    // Restore project state to all synths
+    // Restore project state to all processors
     void restoreAllVoices();
+
+    // Mark a voice as not ready (for thread-safe instrument swaps)
+    void setVoiceReady(int voice, bool ready);
+
+    // Master effects
+    MasterFXChain &getMasterFXChain() { return masterFXChain_; }
+    const MasterFXChain &getMasterFXChain() const { return masterFXChain_; }
 
     // Sample rate
     double getSampleRate() const { return sampleRate_; }
@@ -165,9 +183,14 @@ class SurgeBoxEngine
 
   private:
     void mixVoices(float *outputL, float *outputR, int numSamples);
+    void drainPendingNotes();
 
     // Processors are owned by plugin, we hold pointers
-    std::array<SurgeSynthProcessor *, NUM_VOICES> processors_{};
+    std::array<juce::AudioProcessor *, NUM_VOICES> processors_{};
+    std::array<InstrumentType, NUM_VOICES> instrumentTypes_{};
+
+    // Thread safety: audio thread checks before processing a voice
+    std::array<std::atomic<bool>, NUM_VOICES> voiceReady_{};
 
     GrooveboxProject project_;
     SequencerEngine sequencer_;
@@ -189,8 +212,17 @@ class SurgeBoxEngine
     // Pre-allocated MIDI buffers for each voice (avoid allocations in audio thread)
     std::array<juce::MidiBuffer, NUM_VOICES> voiceMidiBuffers_;
 
+    // Lock-free SPSC note queue for UI -> audio thread
+    static constexpr int MAX_PENDING_NOTES = 64;
+    std::array<PendingNoteEvent, MAX_PENDING_NOTES> pendingNotes_;
+    std::atomic<int> pendingNoteWritePos_{0};
+    std::atomic<int> pendingNoteReadPos_{0};
+
     // Block start position for syncing Surge's internal time
     double blockStartBeat_{0.0};
+
+    // Master effects chain (Surge-based FX applied after voice mix)
+    MasterFXChain masterFXChain_;
 };
 
 } // namespace SurgeBox

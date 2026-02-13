@@ -1,3 +1,6 @@
 [submodule "libs/surge"]
 	path = libs/surge
 	url = https://github.com/surge-synthesizer/surge.git
+[submodule "libs/dexed"]
+	path = libs/dexed
+	url = https://github.com/asb2m10/dexed.git

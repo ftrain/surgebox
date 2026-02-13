@@ -14,6 +14,7 @@
 #include "gui/widgets/VoiceSelector.h"
 #include "gui/widgets/TransportControls.h"
 #include "core/MusicTheory.h"
+#include "core/GrooveboxProject.h"
 
 namespace SurgeBox
 {
@@ -49,6 +50,10 @@ class CommandBar : public juce::Component,
     std::function<void(int, ScaleType)> onScaleChanged;
     std::function<void()> onClearPattern;
     std::function<void()> onMeasuresChanged;
+    std::function<void(bool)> onMasterFXToggled;
+    std::function<void(SurgeBox::InstrumentType)> onInstrumentChanged;
+
+    void updateInstrumentSelector();
 
   private:
     SurgeBoxEngine& engine_;
@@ -81,6 +86,13 @@ class CommandBar : public juce::Component,
     std::unique_ptr<juce::Slider> tempoSlider_;
     std::unique_ptr<juce::Label> tempoLabel_;
     std::unique_ptr<juce::ComboBox> tempoMultiplierCombo_;
+
+    // Master FX toggle
+    std::unique_ptr<juce::TextButton> masterFXButton_;
+
+    // Instrument selector
+    std::unique_ptr<juce::ComboBox> instrumentCombo_;
+    std::unique_ptr<juce::Label> instrumentLabel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CommandBar)
 };

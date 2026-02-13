@@ -138,6 +138,26 @@ CommandBar::CommandBar(SurgeBoxEngine& engine) : engine_(engine)
     tempoMultiplierCombo_->setTooltip("Playback speed multiplier");
     tempoMultiplierCombo_->addListener(this);
     addAndMakeVisible(*tempoMultiplierCombo_);
+
+    masterFXButton_ = std::make_unique<juce::TextButton>("FX");
+    masterFXButton_->addListener(this);
+    masterFXButton_->setClickingTogglesState(true);
+    masterFXButton_->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff4a4a6a));
+    masterFXButton_->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff6a44aa));
+    masterFXButton_->setTooltip("Master Effects Chain");
+    addAndMakeVisible(*masterFXButton_);
+
+    instrumentLabel_ = std::make_unique<juce::Label>("", "Inst:");
+    instrumentLabel_->setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(*instrumentLabel_);
+
+    instrumentCombo_ = std::make_unique<juce::ComboBox>();
+    instrumentCombo_->addItem("Surge XT", 1);
+    instrumentCombo_->addItem("Dexed", 2);
+    instrumentCombo_->addItem("TR-808", 3);
+    instrumentCombo_->setSelectedId(1, juce::dontSendNotification);
+    instrumentCombo_->addListener(this);
+    addAndMakeVisible(*instrumentCombo_);
 }
 
 void CommandBar::resized()
@@ -146,6 +166,10 @@ void CommandBar::resized()
     int pad = 2;
 
     voiceSelector_->setBounds(commandBar.removeFromLeft(160).reduced(pad, pad));
+
+    instrumentLabel_->setBounds(commandBar.removeFromLeft(35).reduced(pad, pad));
+    instrumentCombo_->setBounds(commandBar.removeFromLeft(90).reduced(pad, pad));
+
     transport_->setBounds(commandBar.removeFromLeft(120).reduced(pad, pad));
     stepRecordButton_->setBounds(commandBar.removeFromLeft(60).reduced(pad, pad));
 
@@ -172,6 +196,9 @@ void CommandBar::resized()
     scaleLabel_->setBounds(commandBar.removeFromLeft(45).reduced(pad, pad));
     scaleRootCombo_->setBounds(commandBar.removeFromLeft(55).reduced(pad, pad));
     scaleTypeCombo_->setBounds(commandBar.removeFromLeft(100).reduced(pad, pad));
+
+    commandBar.removeFromLeft(10);
+    masterFXButton_->setBounds(commandBar.removeFromLeft(40).reduced(pad, pad));
 }
 
 void CommandBar::buttonClicked(juce::Button* button)
@@ -217,6 +244,11 @@ void CommandBar::buttonClicked(juce::Button* button)
         if (onClearPattern)
             onClearPattern();
     }
+    else if (button == masterFXButton_.get())
+    {
+        if (onMasterFXToggled)
+            onMasterFXToggled(masterFXButton_->getToggleState());
+    }
 }
 
 void CommandBar::comboBoxChanged(juce::ComboBox* comboBox)
@@ -257,6 +289,18 @@ void CommandBar::comboBoxChanged(juce::ComboBox* comboBox)
         if (onScaleChanged)
             onScaleChanged(root, type);
     }
+    else if (comboBox == instrumentCombo_.get())
+    {
+        SurgeBox::InstrumentType type = SurgeBox::InstrumentType::SurgeXT;
+        switch (instrumentCombo_->getSelectedId())
+        {
+            case 1: type = SurgeBox::InstrumentType::SurgeXT; break;
+            case 2: type = SurgeBox::InstrumentType::Dexed; break;
+            case 3: type = SurgeBox::InstrumentType::TR808; break;
+        }
+        if (onInstrumentChanged)
+            onInstrumentChanged(type);
+    }
     else if (comboBox == tempoMultiplierCombo_.get())
     {
         double multiplier = 1.0;
@@ -292,6 +336,20 @@ void CommandBar::updateMeasuresLabel()
 {
     measuresLabel_->setText(MeasureControls::getMeasuresLabel(engine_.getActivePatternModel()),
                             juce::dontSendNotification);
+}
+
+void CommandBar::updateInstrumentSelector()
+{
+    int activeVoice = engine_.getActiveVoice();
+    auto type = engine_.getInstrumentType(activeVoice);
+    int comboId = 1;
+    switch (type)
+    {
+        case SurgeBox::InstrumentType::SurgeXT: comboId = 1; break;
+        case SurgeBox::InstrumentType::Dexed: comboId = 2; break;
+        case SurgeBox::InstrumentType::TR808: comboId = 3; break;
+    }
+    instrumentCombo_->setSelectedId(comboId, juce::dontSendNotification);
 }
 
 void CommandBar::updateTempoMultiplier(double multiplier)

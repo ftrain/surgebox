@@ -13,6 +13,7 @@
 #include "CommandBar.h"
 #include "gui/widgets/PianoRollWidget.h"
 #include "gui/widgets/PianoKeyboardWidget.h"
+#include "gui/widgets/MasterFXEditor.h"
 #include "gui/SurgeBoxLookAndFeel.h"
 #include "gui/Layout.h"
 
@@ -47,11 +48,11 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     std::unique_ptr<SurgeBox::CommandBar> commandBar_;
     bool stepRecordEnabled_{false};
 
-    // Surge editor in scrollable viewport
-    std::unique_ptr<juce::Viewport> surgeViewport_;
-    std::unique_ptr<juce::Component> surgeEditorWrapper_;
-    std::unique_ptr<juce::AudioProcessorEditor> surgeEditor_;
-    int currentSurgeVoice_{-1};
+    // Instrument editor in scrollable viewport
+    std::unique_ptr<juce::Viewport> instrumentViewport_;
+    std::unique_ptr<juce::Component> instrumentEditorWrapper_;
+    std::unique_ptr<juce::AudioProcessorEditor> instrumentEditor_;
+    int currentEditorVoice_{-1};
 
     // Piano roll in scrollable viewport with resizable divider
     std::unique_ptr<juce::Viewport> pianoRollViewport_;
@@ -60,10 +61,15 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     int pianoRollHeight_{300};
     bool draggingDivider_{false};
 
-    void rebuildSurgeEditor();
+    // Master FX editor (shown in instrument viewport when FX button is toggled)
+    std::unique_ptr<SurgeBox::MasterFXEditor> masterFXEditor_;
+    bool showingMasterFX_{false};
+
+    void rebuildInstrumentEditor();
     void onVoiceChanged(int voice);
     void updateKeyboardListener();
-    void updateSurgeEditorScale();
+    void updateInstrumentEditorScale();
+    void showMasterFXEditor(bool show);
 
     SurgeBox::SurgeBoxLookAndFeel lookAndFeel_;
 

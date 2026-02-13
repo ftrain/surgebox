@@ -34,14 +34,10 @@ void PianoRollWidget::setEngine(SurgeBoxEngine* engine)
     if (engine_)
     {
         onNoteOn = [this](int pitch, int velocity) {
-            auto* synth = engine_->getActiveSynth();
-            if (synth)
-                synth->playNote(0, pitch, velocity, 0, -1);
+            engine_->sendNoteToActiveVoice(pitch, velocity, true);
         };
         onNoteOff = [this](int pitch) {
-            auto* synth = engine_->getActiveSynth();
-            if (synth)
-                synth->releaseNote(0, pitch, 0);
+            engine_->sendNoteToActiveVoice(pitch, 0, false);
         };
     }
 }

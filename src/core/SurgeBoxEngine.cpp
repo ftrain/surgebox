@@ -27,11 +27,6 @@ SequencerEngine::SequencerEngine() = default;
 
 void SequencerEngine::setProject(GrooveboxProject *project) { project_ = project; }
 
-void SequencerEngine::setSynths(std::array<SurgeSynthesizer *, NUM_VOICES> synths)
-{
-    synths_ = synths;
-}
-
 void SequencerEngine::play()
 {
     // If already playing, don't reset position
@@ -44,18 +39,8 @@ void SequencerEngine::play()
 
 void SequencerEngine::stop()
 {
-    playing_.store(false);
-
-    // Release all active notes
-    for (const auto &active : activeNotes_)
-    {
-        if (synths_[active.voiceIndex])
-            synths_[active.voiceIndex]->releaseNote(0, active.pitch, 0);
-    }
-    activeNotes_.clear();
-
-    // Reset to beginning when stopped
-    currentBeat_.store(0.0);
+    // Defer note-off to audio thread via pendingStop flag
+    pendingStop_.store(true);
 }
 
 void SequencerEngine::setPlaying(bool playing)
@@ -68,14 +53,8 @@ void SequencerEngine::setPlaying(bool playing)
 
 void SequencerEngine::setPositionBeats(double beat)
 {
-    // Release all active notes when jumping
-    for (const auto &active : activeNotes_)
-    {
-        if (synths_[active.voiceIndex])
-            synths_[active.voiceIndex]->releaseNote(0, active.pitch, 0);
-    }
-    activeNotes_.clear();
-    currentBeat_.store(beat);
+    // Defer position jump to audio thread (note-offs handled there)
+    pendingPositionJump_.store(beat);
 }
 
 double SequencerEngine::getLoopEndBeat() const
@@ -112,6 +91,36 @@ std::vector<uint8_t> SequencerEngine::getPlayingNotes(int voiceIndex) const
 void SequencerEngine::process(int numSamples, double sampleRate,
                               std::array<juce::MidiBuffer *, NUM_VOICES> midiBuffers)
 {
+    // Handle pending stop (inject note-offs for all active notes)
+    if (pendingStop_.load())
+    {
+        for (const auto &active : activeNotes_)
+        {
+            if (midiBuffers[active.voiceIndex])
+                midiBuffers[active.voiceIndex]->addEvent(
+                    juce::MidiMessage::noteOff(1, active.pitch), 0);
+        }
+        activeNotes_.clear();
+        playing_.store(false);
+        pendingStop_.store(false);
+        currentBeat_.store(0.0);
+        return;
+    }
+
+    // Handle pending position jump (inject note-offs, then jump)
+    double jumpTo = pendingPositionJump_.exchange(-1.0);
+    if (jumpTo >= 0.0)
+    {
+        for (const auto &active : activeNotes_)
+        {
+            if (midiBuffers[active.voiceIndex])
+                midiBuffers[active.voiceIndex]->addEvent(
+                    juce::MidiMessage::noteOff(1, active.pitch), 0);
+        }
+        activeNotes_.clear();
+        currentBeat_.store(jumpTo);
+    }
+
     if (!playing_.load() || !project_)
         return;
 
@@ -310,6 +319,10 @@ void SequencerEngine::releaseNotesEndingInRange(double startBeat, double endBeat
 
 SurgeBoxEngine::SurgeBoxEngine()
 {
+    // Initialize voiceReady flags
+    for (auto &ready : voiceReady_)
+        ready.store(false);
+
     // Create pattern models for each voice with auto-sync to project patterns
     for (int i = 0; i < NUM_VOICES; ++i)
     {
@@ -320,18 +333,17 @@ SurgeBoxEngine::SurgeBoxEngine()
 
 SurgeBoxEngine::~SurgeBoxEngine() { shutdown(); }
 
-void SurgeBoxEngine::setProcessors(std::array<SurgeSynthProcessor *, NUM_VOICES> processors)
+void SurgeBoxEngine::setProcessors(std::array<juce::AudioProcessor *, NUM_VOICES> processors,
+                                    std::array<InstrumentType, NUM_VOICES> types)
 {
     processors_ = processors;
+    instrumentTypes_ = types;
 
-    // Also set up synth pointers for the sequencer
-    std::array<SurgeSynthesizer *, NUM_VOICES> synthPtrs{};
     for (int i = 0; i < NUM_VOICES; i++)
     {
-        if (processors_[i] && processors_[i]->surge)
-            synthPtrs[i] = processors_[i]->surge.get();
+        voiceReady_[i].store(processors_[i] != nullptr);
+        project_.voices[i].instrumentType = types[i];
     }
-    sequencer_.setSynths(synthPtrs);
 }
 
 bool SurgeBoxEngine::initialize(double sampleRate, int blockSize)
@@ -352,16 +364,46 @@ bool SurgeBoxEngine::initialize(double sampleRate, int blockSize)
     project_.reset();
     for (int i = 0; i < NUM_VOICES; i++)
     {
-        if (processors_[i] && processors_[i]->surge)
+        project_.voices[i].instrumentType = instrumentTypes_[i];
+
+        // For Surge XT, try to get the patch name
+        if (instrumentTypes_[i] == InstrumentType::SurgeXT)
         {
-            project_.voices[i].name = processors_[i]->surge->storage.getPatch().name;
-            if (project_.voices[i].name.empty())
-                project_.voices[i].name = "Init";
+            auto *surgeProc = dynamic_cast<SurgeSynthProcessor *>(processors_[i]);
+            if (surgeProc && surgeProc->surge)
+            {
+                project_.voices[i].name = surgeProc->surge->storage.getPatch().name;
+                if (project_.voices[i].name.empty())
+                    project_.voices[i].name = "Init";
+            }
+        }
+        else if (instrumentTypes_[i] == InstrumentType::TR808)
+        {
+            project_.voices[i].name = "TR-808";
+        }
+        else if (instrumentTypes_[i] == InstrumentType::Dexed)
+        {
+            project_.voices[i].name = "Dexed";
         }
     }
 
     // Sync pattern models from project
     syncPatternModelsFromProject();
+
+    // Initialize master FX chain using SurgeStorage from first Surge XT voice
+    for (int i = 0; i < NUM_VOICES; i++)
+    {
+        if (instrumentTypes_[i] == InstrumentType::SurgeXT)
+        {
+            auto *surgeProc = dynamic_cast<SurgeSynthProcessor *>(processors_[i]);
+            if (surgeProc && surgeProc->surge)
+            {
+                masterFXChain_.initialize(&surgeProc->surge->storage, sampleRate);
+                masterFXChain_.loadFromProject(project_);
+                break;
+            }
+        }
+    }
 
     initialized_ = true;
     return true;
@@ -384,16 +426,23 @@ void SurgeBoxEngine::shutdown()
     }
 
     sequencer_.stop();
-
-    // Clear sequencer's synth pointers before we lose access to processors
-    sequencer_.setSynths({});
+    masterFXChain_.shutdown();
 
     // Note: We don't own the processors, plugin layer does
-    for (auto &proc : processors_)
+    for (int i = 0; i < NUM_VOICES; i++)
     {
-        if (proc && proc->surge)
-            proc->surge->allNotesOff();
-        proc = nullptr;
+        if (processors_[i])
+        {
+            // For Surge XT, send all-notes-off
+            if (instrumentTypes_[i] == InstrumentType::SurgeXT)
+            {
+                auto *surgeProc = dynamic_cast<SurgeSynthProcessor *>(processors_[i]);
+                if (surgeProc && surgeProc->surge)
+                    surgeProc->surge->allNotesOff();
+            }
+        }
+        processors_[i] = nullptr;
+        voiceReady_[i].store(false);
     }
 
     initialized_ = false;
@@ -418,6 +467,9 @@ void SurgeBoxEngine::process(float *outputL, float *outputR, int numSamples)
     for (auto &buf : voiceMidiBuffers_)
         buf.clear();
 
+    // Drain any pending note events from UI thread into MIDI buffers
+    drainPendingNotes();
+
     // Build array of pointers for sequencer
     std::array<juce::MidiBuffer *, NUM_VOICES> midiBufferPtrs;
     for (int i = 0; i < NUM_VOICES; ++i)
@@ -433,6 +485,9 @@ void SurgeBoxEngine::process(float *outputL, float *outputR, int numSamples)
     // Process each voice and mix
     mixVoices(outputL, outputR, numSamples);
 
+    // Apply master effects chain (post-mix, pre-master-volume)
+    masterFXChain_.process(outputL, outputR, numSamples);
+
     // Apply master volume
     float mv = project_.masterVolume;
     for (int i = 0; i < numSamples; i++)
@@ -444,6 +499,35 @@ void SurgeBoxEngine::process(float *outputL, float *outputR, int numSamples)
     // Notify playhead position (for UI)
     if (onPlayheadMoved && sequencer_.isPlaying())
         onPlayheadMoved(sequencer_.getPositionBeats());
+}
+
+void SurgeBoxEngine::drainPendingNotes()
+{
+    int readPos = pendingNoteReadPos_.load(std::memory_order_acquire);
+    int writePos = pendingNoteWritePos_.load(std::memory_order_acquire);
+
+    while (readPos != writePos)
+    {
+        const auto &evt = pendingNotes_[readPos % MAX_PENDING_NOTES];
+        int voiceIdx = evt.voiceIndex;
+
+        if (voiceIdx >= 0 && voiceIdx < NUM_VOICES)
+        {
+            if (evt.noteOn)
+            {
+                voiceMidiBuffers_[voiceIdx].addEvent(
+                    juce::MidiMessage::noteOn(1, evt.pitch, evt.velocity), 0);
+            }
+            else
+            {
+                voiceMidiBuffers_[voiceIdx].addEvent(
+                    juce::MidiMessage::noteOff(1, evt.pitch), 0);
+            }
+        }
+
+        readPos++;
+        pendingNoteReadPos_.store(readPos, std::memory_order_release);
+    }
 }
 
 void SurgeBoxEngine::mixVoices(float *outputL, float *outputR, int numSamples)
@@ -464,7 +548,7 @@ void SurgeBoxEngine::mixVoices(float *outputL, float *outputR, int numSamples)
 
     for (int v = 0; v < NUM_VOICES; v++)
     {
-        if (!processors_[v] || !processors_[v]->surge)
+        if (!processors_[v] || !voiceReady_[v].load(std::memory_order_acquire))
             continue;
 
         const auto &voice = project_.voices[v];
@@ -475,18 +559,22 @@ void SurgeBoxEngine::mixVoices(float *outputL, float *outputR, int numSamples)
         if (!anySolo && voice.mute)
             continue;
 
-        // Sync Surge's internal time with our sequencer ONCE at block start
-        // Use the voice's tempo multiplier so LFOs/effects sync to voice tempo
-        auto *synth = processors_[v]->surge.get();
-        double multiplier = voice.tempoMultiplier.load();
-        if (multiplier <= 0) multiplier = 1.0;
-        synth->time_data.tempo = project_.tempo * multiplier;
-        synth->time_data.ppqPos = blockStartBeat_;
-        synth->time_data.timeSigNumerator = 4;
-        synth->time_data.timeSigDenominator = 4;
-        // Note: processBlock() will also call resetStateFromTimeData() internally,
-        // but setting time_data first ensures our tempo is used
-        synth->resetStateFromTimeData();
+        // Sync Surge XT's internal time with our sequencer ONCE at block start
+        if (instrumentTypes_[v] == InstrumentType::SurgeXT)
+        {
+            auto *surgeProc = dynamic_cast<SurgeSynthProcessor *>(processors_[v]);
+            if (surgeProc && surgeProc->surge)
+            {
+                auto *synth = surgeProc->surge.get();
+                double multiplier = voice.tempoMultiplier.load();
+                if (multiplier <= 0) multiplier = 1.0;
+                synth->time_data.tempo = project_.tempo * multiplier;
+                synth->time_data.ppqPos = blockStartBeat_;
+                synth->time_data.timeSigNumerator = 4;
+                synth->time_data.timeSigDenominator = 4;
+                synth->resetStateFromTimeData();
+            }
+        }
 
         // Clear and process with MIDI events from sequencer
         voiceBuffer_->clear();
@@ -519,33 +607,62 @@ void SurgeBoxEngine::setActiveVoice(int voice)
         onVoiceChanged(voice);
 }
 
-SurgeSynthesizer *SurgeBoxEngine::getSynth(int voice)
+InstrumentType SurgeBoxEngine::getInstrumentType(int voice) const
+{
+    if (voice < 0 || voice >= NUM_VOICES)
+        return InstrumentType::SurgeXT;
+    return instrumentTypes_[voice];
+}
+
+juce::AudioProcessor *SurgeBoxEngine::getProcessor(int voice)
 {
     if (voice < 0 || voice >= NUM_VOICES)
         return nullptr;
-    if (!processors_[voice])
-        return nullptr;
-    return processors_[voice]->surge.get();
+    return processors_[voice];
+}
+
+void SurgeBoxEngine::sendNoteToActiveVoice(int pitch, int velocity, bool noteOn)
+{
+    int writePos = pendingNoteWritePos_.load(std::memory_order_acquire);
+    int readPos = pendingNoteReadPos_.load(std::memory_order_acquire);
+
+    // Check if queue is full
+    if (writePos - readPos >= MAX_PENDING_NOTES)
+        return;
+
+    auto &evt = pendingNotes_[writePos % MAX_PENDING_NOTES];
+    evt.voiceIndex = activeVoice_;
+    evt.pitch = static_cast<uint8_t>(pitch);
+    evt.velocity = static_cast<uint8_t>(velocity);
+    evt.noteOn = noteOn;
+
+    pendingNoteWritePos_.store(writePos + 1, std::memory_order_release);
 }
 
 void SurgeBoxEngine::captureAllVoices()
 {
     for (int i = 0; i < NUM_VOICES; i++)
     {
-        auto *synth = getSynth(i);
-        if (synth)
-            project_.voices[i].captureFromSynth(synth);
+        if (processors_[i])
+            project_.voices[i].captureFromProcessor(processors_[i]);
     }
+    masterFXChain_.saveToProject(project_);
 }
 
 void SurgeBoxEngine::restoreAllVoices()
 {
     for (int i = 0; i < NUM_VOICES; i++)
     {
-        auto *synth = getSynth(i);
-        if (synth)
-            project_.voices[i].restoreToSynth(synth);
+        if (processors_[i])
+            project_.voices[i].restoreToProcessor(processors_[i]);
     }
+    masterFXChain_.loadFromProject(project_);
+}
+
+void SurgeBoxEngine::setVoiceReady(int voice, bool ready)
+{
+    if (voice >= 0 && voice < NUM_VOICES)
+        voiceReady_[voice].store(ready, std::memory_order_release);
 }
 
 PatternModel *SurgeBoxEngine::getPatternModel(int voice)

@@ -10,9 +10,11 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "core/SurgeBoxEngine.h"
-#include "SurgeSynthProcessor.h"
+#include "core/GrooveboxProject.h"
 #include <array>
 #include <memory>
+
+class SurgeSynthProcessor;
 
 class SurgeBoxProcessor : public juce::AudioProcessor
 {
@@ -48,15 +50,29 @@ class SurgeBoxProcessor : public juce::AudioProcessor
     SurgeBox::SurgeBoxEngine &getEngine() { return engine_; }
     const SurgeBox::SurgeBoxEngine &getEngine() const { return engine_; }
 
-    // Access to individual Surge processors (for GUI)
-    SurgeSynthProcessor *getProcessor(int voice);
+    // Access to individual processors (for GUI editor creation)
+    juce::AudioProcessor *getProcessor(int voice);
+
+    // Get a Surge processor specifically (for Surge-specific UI features)
+    SurgeSynthProcessor *getSurgeProcessor(int voice);
+
+    // Instrument factory
+    static std::unique_ptr<juce::AudioProcessor> createInstrument(SurgeBox::InstrumentType type);
+
+    // Switch instrument type for a voice (thread-safe)
+    void switchInstrument(int voice, SurgeBox::InstrumentType newType);
 
   private:
-    // We own the Surge processors (which each own a SurgeSynthesizer)
-    std::array<std::unique_ptr<SurgeSynthProcessor>, SurgeBox::NUM_VOICES> surgeProcessors_;
+    // We own the processor instances
+    std::array<std::unique_ptr<juce::AudioProcessor>, SurgeBox::NUM_VOICES> processors_;
+    std::array<SurgeBox::InstrumentType, SurgeBox::NUM_VOICES> instrumentTypes_{};
 
     // Engine orchestrates the voices
     SurgeBox::SurgeBoxEngine engine_;
+
+    // Current sample rate / block size for re-preparing new instruments
+    double currentSampleRate_{44100.0};
+    int currentBlockSize_{512};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SurgeBoxProcessor)
 };
