@@ -56,17 +56,25 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
 
     commandBar_->onInstrumentChanged = [this](SurgeBox::InstrumentType type) {
         int voice = engine_.getActiveVoice();
+
+        // Destroy the old editor BEFORE switching instruments.
+        // The Surge editor's destructor accesses SurgeSynthesizer*, which
+        // switchInstrument() will destroy.
+        if (!showingMasterFX_)
+        {
+            instrumentViewport_->setViewedComponent(nullptr, false);
+            instrumentEditorWrapper_.reset();
+            instrumentEditor_.reset();
+            currentEditorVoice_ = -1;
+        }
+
         processor_.switchInstrument(voice, type);
 
-        // Exit master FX view when switching instruments
+        // Rebuild editor for the new instrument
         if (showingMasterFX_)
             showMasterFXEditor(false);
         else
             rebuildInstrumentEditor();
-
-        // Force rebuild since the processor changed
-        currentEditorVoice_ = -1;
-        rebuildInstrumentEditor();
     };
 
     // Create scrollable viewport for instrument editor
