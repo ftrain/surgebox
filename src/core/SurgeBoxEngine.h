@@ -10,7 +10,10 @@
 
 #include "GrooveboxProject.h"
 #include "PatternModel.h"
+#include "ProjectModel.h"
+#include "MidiMappingEngine.h"
 #include "MasterFXChain.h"
+#include "SurgeBoxContext.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_data_structures/juce_data_structures.h>
@@ -134,6 +137,18 @@ class SurgeBoxEngine
     PatternModel *getActivePatternModel() { return getPatternModel(activeVoice_); }
     juce::UndoManager &getUndoManager() { return undoManager_; }
 
+    // Project model (with undo support for non-pattern state)
+    ProjectModel &getProjectModel() { return projectModel_; }
+
+    // MIDI CC mapping engine
+    MidiMappingEngine &getMidiMappingEngine() { return midiMappingEngine_; }
+
+    // Context object for passing to UI components
+    SurgeBoxContext getContext()
+    {
+        return {*this, project_, undoManager_, projectModel_, midiMappingEngine_};
+    }
+
     // Sync pattern models to/from project (for save/load)
     void syncPatternModelsFromProject();
     void syncPatternModelsToProject();
@@ -195,6 +210,8 @@ class SurgeBoxEngine
     GrooveboxProject project_;
     SequencerEngine sequencer_;
     juce::UndoManager undoManager_;
+    ProjectModel projectModel_;
+    MidiMappingEngine midiMappingEngine_;
     std::array<std::unique_ptr<PatternModel>, NUM_VOICES> patternModels_;
 
     int activeVoice_{0};
@@ -205,6 +222,12 @@ class SurgeBoxEngine
     // Mixing buffers - used to call processBlock on each processor
     alignas(16) float mixBufferL_[4096];
     alignas(16) float mixBufferR_[4096];
+
+    // Aux send buffers for send FX routing (slots 0/1 = send A/B)
+    alignas(16) float auxSendAL_[4096];
+    alignas(16) float auxSendAR_[4096];
+    alignas(16) float auxSendBL_[4096];
+    alignas(16) float auxSendBR_[4096];
 
     // Pre-allocated buffer for voice processing (avoid allocations in audio thread)
     std::unique_ptr<juce::AudioBuffer<float>> voiceBuffer_;

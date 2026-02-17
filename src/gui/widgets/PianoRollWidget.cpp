@@ -61,7 +61,21 @@ void PianoRollWidget::setPatternModel(PatternModel* model)
 
 void PianoRollWidget::rebuildVisiblePitches()
 {
-    visiblePitches_ = MusicTheory::buildScalePitches(lowestNote_, highestNote_, scaleRoot_, scaleType_);
+    if (!fixedPitches_.empty())
+    {
+        visiblePitches_ = fixedPitches_;
+    }
+    else
+    {
+        visiblePitches_ = MusicTheory::buildScalePitches(lowestNote_, highestNote_, scaleRoot_, scaleType_);
+    }
+}
+
+void PianoRollWidget::setFixedPitches(const std::vector<int>& pitches)
+{
+    fixedPitches_ = pitches;
+    rebuildVisiblePitches();
+    repaint();
 }
 
 void PianoRollWidget::setScale(int root, ScaleType type)

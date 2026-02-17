@@ -164,6 +164,16 @@ add_library(surgebox-core STATIC
     src/core/TR808Processor.h
     src/core/MasterFXChain.cpp
     src/core/MasterFXChain.h
+    src/core/ProjectModel.cpp
+    src/core/ProjectModel.h
+    src/core/PlaceholderProcessor.h
+    src/core/MidiMappingEngine.cpp
+    src/core/MidiMappingEngine.h
+    src/core/VoicePreset.cpp
+    src/core/VoicePreset.h
+    src/core/VoiceProcessor.cpp
+    src/core/VoiceProcessor.h
+    src/core/SurgeBoxContext.h
     src/core/drums/DrumVoices.h
     src/core/drums/FastMath.h
 )

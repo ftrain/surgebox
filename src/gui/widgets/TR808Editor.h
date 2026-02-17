@@ -38,6 +38,10 @@ class TR808Editor : public juce::AudioProcessorEditor
         std::unique_ptr<juce::Slider> toneKnob;
         std::unique_ptr<juce::Slider> driveKnob;
         std::unique_ptr<juce::Label> nameLabel;
+        std::unique_ptr<juce::Label> pitchLabel;
+        std::unique_ptr<juce::Label> decayLabel;
+        std::unique_ptr<juce::Label> toneLabel;
+        std::unique_ptr<juce::Label> driveLabel;
     };
 
     std::array<DrumPad, 13> pads_;

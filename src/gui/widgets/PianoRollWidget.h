@@ -70,6 +70,9 @@ class PianoRollWidget : public juce::Component
     const std::vector<int>& getVisiblePitches() const { return visiblePitches_; }
     int getVisibleNoteCount() const { return static_cast<int>(visiblePitches_.size()); }
 
+    // Restrict pitches to a fixed set (for drum machines). Pass empty to clear.
+    void setFixedPitches(const std::vector<int>& pitches);
+
   private:
     // Grid settings
     int lowestNote_{21};
@@ -88,6 +91,7 @@ class PianoRollWidget : public juce::Component
     int scaleRoot_{0};
     ScaleType scaleType_{ScaleType::Chromatic};
     std::vector<int> visiblePitches_;
+    std::vector<int> fixedPitches_;
     void rebuildVisiblePitches();
 
     // Selection and editing

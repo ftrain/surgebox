@@ -33,6 +33,9 @@ class MasterFXChain
     // Process audio in-place (called from audio thread between mixVoices and master volume)
     void process(float *outputL, float *outputR, int numSamples);
 
+    // Process a single FX slot on the given buffers (for send/insert routing)
+    void processSlot(int slot, float *bufferL, float *bufferR, int numSamples);
+
     // Load effect types and parameters from project state
     void loadFromProject(const GrooveboxProject &project);
 

@@ -318,6 +318,7 @@ void SequencerEngine::releaseNotesEndingInRange(double startBeat, double endBeat
 // ============================================================================
 
 SurgeBoxEngine::SurgeBoxEngine()
+    : projectModel_(&undoManager_)
 {
     // Initialize voiceReady flags
     for (auto &ready : voiceReady_)
@@ -329,6 +330,12 @@ SurgeBoxEngine::SurgeBoxEngine()
         patternModels_[i] = std::make_unique<PatternModel>(&undoManager_);
         patternModels_[i]->setAutoSyncPattern(&project_.voices[i].pattern);
     }
+
+    // Connect project model to project for auto-sync
+    projectModel_.setProject(&project_);
+
+    // Connect MIDI mapping engine to project for serialization
+    project_.midiMappingEngine = &midiMappingEngine_;
 }
 
 SurgeBoxEngine::~SurgeBoxEngine() { shutdown(); }
@@ -478,15 +485,31 @@ void SurgeBoxEngine::process(float *outputL, float *outputR, int numSamples)
     // Advance sequencer - populates MIDI buffers with sample-accurate events
     sequencer_.process(numSamples, sampleRate_, midiBufferPtrs);
 
-    // Clear output
+    // Clear output and aux buffers
     memset(outputL, 0, numSamples * sizeof(float));
     memset(outputR, 0, numSamples * sizeof(float));
+    memset(auxSendAL_, 0, numSamples * sizeof(float));
+    memset(auxSendAR_, 0, numSamples * sizeof(float));
+    memset(auxSendBL_, 0, numSamples * sizeof(float));
+    memset(auxSendBR_, 0, numSamples * sizeof(float));
 
-    // Process each voice and mix
+    // Process each voice and mix (also populates aux send buffers)
     mixVoices(outputL, outputR, numSamples);
 
-    // Apply master effects chain (post-mix, pre-master-volume)
-    masterFXChain_.process(outputL, outputR, numSamples);
+    // Process send FX: slot 0 = Send A, slot 1 = Send B
+    masterFXChain_.processSlot(0, auxSendAL_, auxSendAR_, numSamples);
+    masterFXChain_.processSlot(1, auxSendBL_, auxSendBR_, numSamples);
+
+    // Sum aux returns into main bus
+    for (int i = 0; i < numSamples; i++)
+    {
+        outputL[i] += auxSendAL_[i] + auxSendBL_[i];
+        outputR[i] += auxSendAR_[i] + auxSendBR_[i];
+    }
+
+    // Process insert FX: slots 2 and 3 on main bus
+    masterFXChain_.processSlot(2, outputL, outputR, numSamples);
+    masterFXChain_.processSlot(3, outputL, outputR, numSamples);
 
     // Apply master volume
     float mv = project_.masterVolume;
@@ -584,14 +607,31 @@ void SurgeBoxEngine::mixVoices(float *outputL, float *outputR, int numSamples)
         float vol = voice.volume;
         float panL = std::min(1.0f, 1.0f - voice.pan);
         float panR = std::min(1.0f, 1.0f + voice.pan);
+        float sendA = voice.sendA;
+        float sendB = voice.sendB;
 
         const float *procL = voiceBuffer_->getReadPointer(0);
         const float *procR = voiceBuffer_->getReadPointer(1);
 
         for (int i = 0; i < numSamples; i++)
         {
-            outputL[i] += procL[i] * vol * panL;
-            outputR[i] += procR[i] * vol * panR;
+            float sampleL = procL[i] * vol * panL;
+            float sampleR = procR[i] * vol * panR;
+
+            outputL[i] += sampleL;
+            outputR[i] += sampleR;
+
+            // Route to aux send buffers (pre-fader sends using dry voice signal)
+            if (sendA > 0.0f)
+            {
+                auxSendAL_[i] += procL[i] * sendA;
+                auxSendAR_[i] += procR[i] * sendA;
+            }
+            if (sendB > 0.0f)
+            {
+                auxSendBL_[i] += procL[i] * sendB;
+                auxSendBR_[i] += procR[i] * sendB;
+            }
         }
     }
 }
@@ -657,6 +697,7 @@ void SurgeBoxEngine::restoreAllVoices()
             project_.voices[i].restoreToProcessor(processors_[i]);
     }
     masterFXChain_.loadFromProject(project_);
+    projectModel_.syncFromProject();
 }
 
 void SurgeBoxEngine::setVoiceReady(int voice, bool ready)
@@ -679,6 +720,7 @@ void SurgeBoxEngine::syncPatternModelsFromProject()
         if (patternModels_[i])
             patternModels_[i]->loadFromPattern(project_.voices[i].pattern);
     }
+    projectModel_.syncFromProject();
 }
 
 void SurgeBoxEngine::syncPatternModelsToProject()

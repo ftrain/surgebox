@@ -18,11 +18,23 @@ static const char *drumNames[] = {
     "COWBELL", "RIM", "CLAVES", "MARACAS"
 };
 
+static juce::String midiNoteName(int note)
+{
+    static const char *names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    int octave = (note / 12) - 2;  // MIDI 36 = C1
+    return juce::String(names[note % 12]) + juce::String(octave);
+}
+
 TR808Editor::TR808Editor(TR808Processor &processor)
     : AudioProcessorEditor(&processor), tr808_(processor)
 {
     for (int i = 0; i < 13; i++)
-        setupPad(i, drumNames[i]);
+    {
+        auto voice = static_cast<TR808Processor::DrumVoice>(i);
+        int note = TR808Processor::midiNoteForVoice(voice);
+        juce::String label = juce::String(drumNames[i]) + "  " + midiNoteName(note);
+        setupPad(i, label);
+    }
 
     setSize(900, 500);
 }
@@ -62,6 +74,19 @@ void TR808Editor::setupPad(int index, const juce::String &name)
     makeKnob(pad.decayKnob, "Decay", &params.decay);
     makeKnob(pad.toneKnob, "Tone", &params.tone);
     makeKnob(pad.driveKnob, "Drive", &params.drive);
+
+    auto makeLabel = [this](std::unique_ptr<juce::Label> &label, const juce::String &text) {
+        label = std::make_unique<juce::Label>("", text);
+        label->setColour(juce::Label::textColourId, juce::Colours::grey);
+        label->setJustificationType(juce::Justification::centred);
+        label->setFont(juce::FontOptions(9.0f));
+        addAndMakeVisible(*label);
+    };
+
+    makeLabel(pad.pitchLabel, "Pitch");
+    makeLabel(pad.decayLabel, "Decay");
+    makeLabel(pad.toneLabel, "Tone");
+    makeLabel(pad.driveLabel, "Drive");
 }
 
 void TR808Editor::triggerDrum(int index)
@@ -115,12 +140,19 @@ void TR808Editor::resized()
 
         auto knobArea = padArea.reduced(2);
         int knobWidth = knobArea.getWidth() / 4;
-        int knobHeight = std::min(knobArea.getHeight(), 40);
+        int knobHeight = std::min(knobArea.getHeight() - 12, 40);
+        int labelHeight = 12;
 
         pad.pitchKnob->setBounds(knobArea.getX(), knobArea.getY(), knobWidth, knobHeight);
         pad.decayKnob->setBounds(knobArea.getX() + knobWidth, knobArea.getY(), knobWidth, knobHeight);
         pad.toneKnob->setBounds(knobArea.getX() + knobWidth * 2, knobArea.getY(), knobWidth, knobHeight);
         pad.driveKnob->setBounds(knobArea.getX() + knobWidth * 3, knobArea.getY(), knobWidth, knobHeight);
+
+        int labelY = knobArea.getY() + knobHeight;
+        pad.pitchLabel->setBounds(knobArea.getX(), labelY, knobWidth, labelHeight);
+        pad.decayLabel->setBounds(knobArea.getX() + knobWidth, labelY, knobWidth, labelHeight);
+        pad.toneLabel->setBounds(knobArea.getX() + knobWidth * 2, labelY, knobWidth, labelHeight);
+        pad.driveLabel->setBounds(knobArea.getX() + knobWidth * 3, labelY, knobWidth, labelHeight);
     }
 }
 

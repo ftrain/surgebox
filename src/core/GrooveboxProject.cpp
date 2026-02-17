@@ -7,6 +7,7 @@
  */
 
 #include "GrooveboxProject.h"
+#include "MidiMappingEngine.h"
 #include "tinyxml/tinyxml.h"
 #include "sst/basic-blocks/mechanics/endian-ops.h"
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -250,6 +251,7 @@ static const char *instrumentTypeToString(InstrumentType type)
         case InstrumentType::SurgeXT: return "surgext";
         case InstrumentType::Dexed: return "dexed";
         case InstrumentType::TR808: return "tr808";
+        case InstrumentType::Unknown: return "unknown";
     }
     return "surgext";
 }
@@ -262,6 +264,12 @@ static InstrumentType instrumentTypeFromString(const char *str)
         return InstrumentType::Dexed;
     if (std::strcmp(str, "tr808") == 0)
         return InstrumentType::TR808;
+    if (std::strcmp(str, "unknown") == 0)
+        return InstrumentType::Unknown;
+    // Unknown instrument type strings map to Unknown rather than defaulting to SurgeXT
+    // Known types are handled above; anything unrecognized is truly unknown
+    if (std::strcmp(str, "surgext") != 0)
+        return InstrumentType::Unknown;
     return InstrumentType::SurgeXT;
 }
 
@@ -480,6 +488,11 @@ void GrooveboxProject::toXML(TiXmlDocument &doc)
     }
 
     root.InsertEndChild(metaEl);
+
+    // MIDI mappings
+    if (midiMappingEngine)
+        midiMappingEngine->toXML(&root);
+
     doc.InsertEndChild(root);
 }
 
@@ -549,6 +562,10 @@ void GrooveboxProject::fromXML(TiXmlDocument &doc)
             }
         }
     }
+
+    // MIDI mappings
+    if (midiMappingEngine)
+        midiMappingEngine->fromXML(root);
 }
 
 bool GrooveboxProject::saveToFile(const fs::path &path)

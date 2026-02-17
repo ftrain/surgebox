@@ -11,6 +11,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "core/SurgeBoxEngine.h"
 #include "core/GrooveboxProject.h"
+#include "core/VoiceProcessor.h"
 #include <array>
 #include <memory>
 
@@ -63,9 +64,8 @@ class SurgeBoxProcessor : public juce::AudioProcessor
     void switchInstrument(int voice, SurgeBox::InstrumentType newType);
 
   private:
-    // We own the processor instances
-    std::array<std::unique_ptr<juce::AudioProcessor>, SurgeBox::NUM_VOICES> processors_;
-    std::array<SurgeBox::InstrumentType, SurgeBox::NUM_VOICES> instrumentTypes_{};
+    // We own the processor instances (consolidated type + processor)
+    std::array<SurgeBox::VoiceProcessor, SurgeBox::NUM_VOICES> voices_;
 
     // Engine orchestrates the voices
     SurgeBox::SurgeBoxEngine engine_;

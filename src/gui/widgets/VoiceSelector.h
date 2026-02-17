@@ -26,6 +26,11 @@ class VoiceSelector : public juce::Component
 
     void resized() override;
 
+    void selectVoice(int voice);
+    void selectFX();
+
+    std::function<void(bool)> onFXSelected;
+
   private:
     SurgeBoxEngine *engine_{nullptr};
     std::unique_ptr<Widgets::MultiSwitch> multiSwitch_;

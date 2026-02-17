@@ -10,6 +10,7 @@
 #include "SurgeBoxEditor.h"
 #include "SurgeSynthProcessor.h"
 #include "core/TR808Processor.h"
+#include "core/PlaceholderProcessor.h"
 #include "DexedFactory.h" // createDexedProcessor()
 
 SurgeBoxProcessor::SurgeBoxProcessor()
@@ -20,8 +21,8 @@ SurgeBoxProcessor::SurgeBoxProcessor()
     // Create initial Surge XT processor instances for all voices
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
     {
-        instrumentTypes_[i] = SurgeBox::InstrumentType::SurgeXT;
-        processors_[i] = createInstrument(SurgeBox::InstrumentType::SurgeXT);
+        voices_[i].reset(createInstrument(SurgeBox::InstrumentType::SurgeXT),
+                         SurgeBox::InstrumentType::SurgeXT);
     }
 }
 
@@ -35,29 +36,39 @@ SurgeBoxProcessor::~SurgeBoxProcessor()
     // may have dependencies on the first-created instance.
     for (int i = SurgeBox::NUM_VOICES - 1; i >= 0; i--)
     {
-        if (processors_[i])
+        if (voices_[i])
         {
-            // Call releaseResources to ensure proper cleanup of audio resources
-            processors_[i]->releaseResources();
-            processors_[i].reset();
+            voices_[i]->releaseResources();
+            voices_[i].reset(nullptr, SurgeBox::InstrumentType::Unknown);
         }
     }
 }
 
 std::unique_ptr<juce::AudioProcessor> SurgeBoxProcessor::createInstrument(SurgeBox::InstrumentType type)
 {
-    switch (type)
+    try
     {
-        case SurgeBox::InstrumentType::SurgeXT:
-            return std::make_unique<SurgeSynthProcessor>();
+        switch (type)
+        {
+            case SurgeBox::InstrumentType::SurgeXT:
+                return std::make_unique<SurgeSynthProcessor>();
 
-        case SurgeBox::InstrumentType::TR808:
-            return std::make_unique<SurgeBox::TR808Processor>();
+            case SurgeBox::InstrumentType::TR808:
+                return std::make_unique<SurgeBox::TR808Processor>();
 
-        case SurgeBox::InstrumentType::Dexed:
-            return createDexedProcessor();
+            case SurgeBox::InstrumentType::Dexed:
+                return createDexedProcessor();
+
+            case SurgeBox::InstrumentType::Unknown:
+                return std::make_unique<SurgeBox::PlaceholderProcessor>(type, "Unknown");
+        }
     }
-    return std::make_unique<SurgeSynthProcessor>();
+    catch (...)
+    {
+        // If instrument creation fails, return a silent placeholder
+    }
+
+    return std::make_unique<SurgeBox::PlaceholderProcessor>(type, "Failed");
 }
 
 void SurgeBoxProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -67,18 +78,20 @@ void SurgeBoxProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // Prepare all processors and pass them to engine
     std::array<juce::AudioProcessor *, SurgeBox::NUM_VOICES> procPtrs{};
+    std::array<SurgeBox::InstrumentType, SurgeBox::NUM_VOICES> types{};
 
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
     {
-        if (processors_[i])
+        if (voices_[i])
         {
-            processors_[i]->prepareToPlay(sampleRate, samplesPerBlock);
-            procPtrs[i] = processors_[i].get();
+            voices_[i]->prepareToPlay(sampleRate, samplesPerBlock);
+            procPtrs[i] = voices_[i].get();
         }
+        types[i] = voices_[i].getType();
     }
 
     // Pass processor pointers to engine
-    engine_.setProcessors(procPtrs, instrumentTypes_);
+    engine_.setProcessors(procPtrs, types);
     engine_.initialize(sampleRate, samplesPerBlock);
 }
 
@@ -88,10 +101,10 @@ void SurgeBoxProcessor::releaseResources()
     engine_.shutdown();
 
     // Release resources on each processor
-    for (auto &proc : processors_)
+    for (auto &voice : voices_)
     {
-        if (proc)
-            proc->releaseResources();
+        if (voice)
+            voice->releaseResources();
     }
 }
 
@@ -113,6 +126,13 @@ void SurgeBoxProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mid
         else if (msg.isNoteOff())
         {
             engine_.sendNoteToActiveVoice(msg.getNoteNumber(), 0, false);
+        }
+        else if (msg.isController())
+        {
+            // Route CC through mapping engine
+            engine_.getMidiMappingEngine().processCC(
+                msg.getChannel() - 1, msg.getControllerNumber(),
+                msg.getControllerValue(), engine_.getProject());
         }
         else if (msg.isAllNotesOff() || msg.isAllSoundOff())
         {
@@ -149,23 +169,23 @@ juce::AudioProcessor *SurgeBoxProcessor::getProcessor(int voice)
 {
     if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
         return nullptr;
-    return processors_[voice].get();
+    return voices_[voice].get();
 }
 
 SurgeSynthProcessor *SurgeBoxProcessor::getSurgeProcessor(int voice)
 {
     if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
         return nullptr;
-    if (instrumentTypes_[voice] != SurgeBox::InstrumentType::SurgeXT)
+    if (voices_[voice].getType() != SurgeBox::InstrumentType::SurgeXT)
         return nullptr;
-    return dynamic_cast<SurgeSynthProcessor *>(processors_[voice].get());
+    return dynamic_cast<SurgeSynthProcessor *>(voices_[voice].get());
 }
 
 void SurgeBoxProcessor::switchInstrument(int voice, SurgeBox::InstrumentType newType)
 {
     if (voice < 0 || voice >= SurgeBox::NUM_VOICES)
         return;
-    if (instrumentTypes_[voice] == newType)
+    if (voices_[voice].getType() == newType)
         return;
 
     // Mark voice as not ready (audio thread will skip it)
@@ -176,16 +196,19 @@ void SurgeBoxProcessor::switchInstrument(int voice, SurgeBox::InstrumentType new
     if (newProc)
         newProc->prepareToPlay(currentSampleRate_, currentBlockSize_);
 
-    // Swap processor
-    auto oldProc = std::move(processors_[voice]);
-    processors_[voice] = std::move(newProc);
-    instrumentTypes_[voice] = newType;
+    // Swap processor — release old one
+    auto oldProc = voices_[voice].release();
+    voices_[voice].reset(std::move(newProc), newType);
 
-    // Update engine's pointer
+    // Update engine's pointers
     std::array<juce::AudioProcessor *, SurgeBox::NUM_VOICES> procPtrs{};
+    std::array<SurgeBox::InstrumentType, SurgeBox::NUM_VOICES> types{};
     for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
-        procPtrs[i] = processors_[i].get();
-    engine_.setProcessors(procPtrs, instrumentTypes_);
+    {
+        procPtrs[i] = voices_[i].get();
+        types[i] = voices_[i].getType();
+    }
+    engine_.setProcessors(procPtrs, types);
 
     // Mark voice as ready again
     engine_.setVoiceReady(voice, true);
@@ -230,12 +253,18 @@ void SurgeBoxProcessor::setStateInformation(const void *data, int sizeInBytes)
 
         if (engine_.getProject().loadFromFile(tempPath))
         {
-            // Restore instrument types and recreate processors if needed
+            // Snapshot loaded instrument types BEFORE switching, because
+            // switchInstrument() calls setProcessors() which overwrites
+            // project_.voices[i].instrumentType for ALL voices.
+            std::array<SurgeBox::InstrumentType, SurgeBox::NUM_VOICES> loadedTypes;
+            for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
+                loadedTypes[i] = engine_.getProject().voices[i].instrumentType;
+
+            // Recreate processors whose type changed
             for (int i = 0; i < SurgeBox::NUM_VOICES; i++)
             {
-                auto loadedType = engine_.getProject().voices[i].instrumentType;
-                if (loadedType != instrumentTypes_[i])
-                    switchInstrument(i, loadedType);
+                if (loadedTypes[i] != voices_[i].getType())
+                    switchInstrument(i, loadedTypes[i]);
             }
 
             engine_.restoreAllVoices();

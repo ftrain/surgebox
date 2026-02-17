@@ -103,6 +103,38 @@ void MasterFXChain::process(float *outputL, float *outputR, int numSamples)
     }
 }
 
+void MasterFXChain::processSlot(int slot, float *bufferL, float *bufferR, int numSamples)
+{
+    if (!storage_ || slot < 0 || slot >= NUM_GLOBAL_FX)
+        return;
+
+    auto &s = slots_[slot];
+    if (!s.effect || !s.enabled || s.currentType == fxt_off)
+        return;
+
+    int processed = 0;
+    while (processed < numSamples)
+    {
+        int chunk = std::min(BLOCK_SIZE, numSamples - processed);
+
+        memcpy(fxBufferL_, bufferL + processed, chunk * sizeof(float));
+        memcpy(fxBufferR_, bufferR + processed, chunk * sizeof(float));
+
+        if (chunk < BLOCK_SIZE)
+        {
+            memset(fxBufferL_ + chunk, 0, (BLOCK_SIZE - chunk) * sizeof(float));
+            memset(fxBufferR_ + chunk, 0, (BLOCK_SIZE - chunk) * sizeof(float));
+        }
+
+        s.effect->process(fxBufferL_, fxBufferR_);
+
+        memcpy(bufferL + processed, fxBufferL_, chunk * sizeof(float));
+        memcpy(bufferR + processed, fxBufferR_, chunk * sizeof(float));
+
+        processed += chunk;
+    }
+}
+
 void MasterFXChain::loadFromProject(const GrooveboxProject &project)
 {
     if (!storage_)

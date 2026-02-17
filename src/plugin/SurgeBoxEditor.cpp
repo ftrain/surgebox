@@ -9,6 +9,7 @@
 #include "SurgeBoxEditor.h"
 #include "SurgeSynthEditor.h"
 #include "SurgeSynthProcessor.h"
+#include "core/TR808Processor.h"
 #include "gui/Theme.h"
 #include "gui/Layout.h"
 
@@ -50,8 +51,88 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
         resized();
     };
 
-    commandBar_->onMasterFXToggled = [this](bool show) {
-        showMasterFXEditor(show);
+    commandBar_->getVoiceSelector().onFXSelected = [this](bool showFX) {
+        showMasterFXEditor(showFX);
+    };
+
+    commandBar_->onSavePreset = [this]() {
+        int voice = engine_.getActiveVoice();
+        engine_.captureAllVoices();
+
+        auto chooser = std::make_shared<juce::FileChooser>(
+            "Save Voice Preset",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            "*" + juce::String(SurgeBox::VoicePreset::FILE_EXTENSION));
+
+        chooser->launchAsync(juce::FileBrowserComponent::saveMode |
+                              juce::FileBrowserComponent::canSelectFiles,
+            [this, voice, chooser](const juce::FileChooser &fc) {
+                auto result = fc.getResult();
+                if (result == juce::File())
+                    return;
+
+                auto path = result.getFullPathName().toStdString();
+                if (result.getFileExtension().isEmpty())
+                    path += SurgeBox::VoicePreset::FILE_EXTENSION;
+
+                SurgeBox::VoicePreset::saveToFile(
+                    engine_.getProject().voices[voice], voice, fs::path(path));
+            });
+    };
+
+    commandBar_->onLoadPreset = [this]() {
+        auto chooser = std::make_shared<juce::FileChooser>(
+            "Load Voice Preset",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            "*" + juce::String(SurgeBox::VoicePreset::FILE_EXTENSION));
+
+        chooser->launchAsync(juce::FileBrowserComponent::openMode |
+                              juce::FileBrowserComponent::canSelectFiles,
+            [this, chooser](const juce::FileChooser &fc) {
+                auto result = fc.getResult();
+                if (result == juce::File())
+                    return;
+
+                int voice = engine_.getActiveVoice();
+                auto &voiceState = engine_.getProject().voices[voice];
+                auto oldType = voiceState.instrumentType;
+
+                if (SurgeBox::VoicePreset::loadFromFile(
+                        voiceState, fs::path(result.getFullPathName().toStdString())))
+                {
+                    // Switch instrument if type changed
+                    if (voiceState.instrumentType != oldType)
+                    {
+                        if (!showingMasterFX_)
+                        {
+                            instrumentViewport_->setViewedComponent(nullptr, false);
+                            instrumentEditorWrapper_.reset();
+                            instrumentEditor_.reset();
+                            currentEditorVoice_ = -1;
+                        }
+                        processor_.switchInstrument(voice, voiceState.instrumentType);
+                    }
+
+                    // Restore patch data to processor
+                    voiceState.restoreToProcessor(processor_.getProcessor(voice));
+
+                    // Sync pattern model
+                    auto *model = engine_.getPatternModel(voice);
+                    if (model)
+                        model->loadFromPattern(voiceState.pattern);
+
+                    // Sync project model
+                    engine_.getProjectModel().syncFromProject();
+
+                    // Rebuild editor
+                    if (!showingMasterFX_)
+                        rebuildInstrumentEditor();
+
+                    commandBar_->updateMeasuresLabel();
+                    commandBar_->updateInstrumentSelector();
+                    resized();
+                }
+            });
     };
 
     commandBar_->onInstrumentChanged = [this](SurgeBox::InstrumentType type) {
@@ -122,6 +203,26 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
     setResizable(true, true);
     setResizeLimits(800, 500, 2400, 1600);
     setSize(1200, 800);
+
+    // Sync toolbar to reflect restored engine state
+    commandBar_->getVoiceSelector().selectVoice(engine_.getActiveVoice());
+    commandBar_->updateInstrumentSelector();
+
+    // Sync piano roll pitch restriction for drum machines
+    {
+        int v = engine_.getActiveVoice();
+        if (engine_.getInstrumentType(v) == SurgeBox::InstrumentType::TR808)
+        {
+            std::vector<int> drumPitches;
+            for (int i = 0; i < SurgeBox::TR808Processor::NUM_DRUM_VOICES; i++)
+            {
+                auto dv = static_cast<SurgeBox::TR808Processor::DrumVoice>(i);
+                drumPitches.push_back(SurgeBox::TR808Processor::midiNoteForVoice(dv));
+            }
+            std::sort(drumPitches.begin(), drumPitches.end());
+            pianoRoll_->setFixedPitches(drumPitches);
+        }
+    }
 
     rebuildInstrumentEditor();
     updateKeyboardListener();
@@ -203,18 +304,18 @@ void SurgeBoxEditor::paint(juce::Graphics& g)
 {
     g.fillAll(SurgeBox::Theme::color(SurgeBox::Theme::background));
 
-    // Command bar background
-    auto commandBarBounds = getCommandBarBounds();
+    // Menu bar background (top)
+    auto menuBarBounds = getCommandBarBounds();
     g.setGradientFill(juce::ColourGradient(
-        SurgeBox::Theme::color(SurgeBox::Theme::commandBarTop), commandBarBounds.getX(), commandBarBounds.getY(),
-        SurgeBox::Theme::color(SurgeBox::Theme::commandBarBottom), commandBarBounds.getX(), commandBarBounds.getBottom(),
+        SurgeBox::Theme::color(SurgeBox::Theme::commandBarTop), menuBarBounds.getX(), menuBarBounds.getY(),
+        SurgeBox::Theme::color(SurgeBox::Theme::commandBarBottom), menuBarBounds.getX(), menuBarBounds.getBottom(),
         false));
-    g.fillRect(commandBarBounds);
+    g.fillRect(menuBarBounds);
 
     g.setColour(juce::Colour(0xff3a4a5a));
-    g.drawHorizontalLine(commandBarBounds.getY(), 0, getWidth());
+    g.drawHorizontalLine(menuBarBounds.getY(), 0, getWidth());
     g.setColour(juce::Colour(0xff0a1020));
-    g.drawHorizontalLine(commandBarBounds.getBottom() - 1, 0, getWidth());
+    g.drawHorizontalLine(menuBarBounds.getBottom() - 1, 0, getWidth());
 
     auto dividerBounds = getDividerBounds();
     g.setColour(SurgeBox::Theme::color(SurgeBox::Theme::divider));
@@ -228,23 +329,23 @@ void SurgeBoxEditor::paint(juce::Graphics& g)
 
 juce::Rectangle<int> SurgeBoxEditor::getCommandBarBounds() const
 {
-    int commandBarTop = getHeight() - pianoRollHeight_ - SurgeBox::Layout::COMMAND_BAR_HEIGHT;
-    return juce::Rectangle<int>(0, commandBarTop, getWidth(), SurgeBox::Layout::COMMAND_BAR_HEIGHT);
+    return juce::Rectangle<int>(0, 0, getWidth(), SurgeBox::Layout::MENU_BAR_HEIGHT);
 }
 
 void SurgeBoxEditor::resized()
 {
     auto bounds = getLocalBounds();
 
+    // Menu bar at top
+    auto menuBarArea = bounds.removeFromTop(SurgeBox::Layout::MENU_BAR_HEIGHT);
+    commandBar_->setBounds(menuBarArea);
+
     pianoRollHeight_ = std::clamp(pianoRollHeight_, SurgeBox::Layout::MIN_PIANO_ROLL_HEIGHT,
                                    bounds.getHeight() - SurgeBox::Layout::MIN_SYNTH_HEIGHT -
-                                   SurgeBox::Layout::DIVIDER_HEIGHT - SurgeBox::Layout::COMMAND_BAR_HEIGHT);
+                                   SurgeBox::Layout::DIVIDER_HEIGHT);
 
     auto pianoRollArea = bounds.removeFromBottom(pianoRollHeight_);
-    auto commandBarArea = bounds.removeFromBottom(SurgeBox::Layout::COMMAND_BAR_HEIGHT);
     bounds.removeFromBottom(SurgeBox::Layout::DIVIDER_HEIGHT);
-
-    commandBar_->setBounds(commandBarArea);
 
     instrumentViewport_->setBounds(bounds);
 
@@ -334,8 +435,7 @@ bool SurgeBoxEditor::keyPressed(const juce::KeyPress& key)
 
 juce::Rectangle<int> SurgeBoxEditor::getDividerBounds() const
 {
-    int dividerY = getHeight() - pianoRollHeight_ - SurgeBox::Layout::COMMAND_BAR_HEIGHT -
-                   SurgeBox::Layout::DIVIDER_HEIGHT;
+    int dividerY = getHeight() - pianoRollHeight_ - SurgeBox::Layout::DIVIDER_HEIGHT;
     return juce::Rectangle<int>(0, dividerY, getWidth(), SurgeBox::Layout::DIVIDER_HEIGHT);
 }
 
@@ -351,11 +451,11 @@ void SurgeBoxEditor::mouseDrag(const juce::MouseEvent& e)
 {
     if (draggingDivider_)
     {
-        int newPianoRollHeight = getHeight() - e.y - SurgeBox::Layout::DIVIDER_HEIGHT / 2 -
-                                 SurgeBox::Layout::COMMAND_BAR_HEIGHT;
+        int newPianoRollHeight = getHeight() - e.y - SurgeBox::Layout::DIVIDER_HEIGHT / 2;
         pianoRollHeight_ = std::clamp(newPianoRollHeight, SurgeBox::Layout::MIN_PIANO_ROLL_HEIGHT,
                                        getHeight() - SurgeBox::Layout::MIN_SYNTH_HEIGHT -
-                                       SurgeBox::Layout::DIVIDER_HEIGHT - SurgeBox::Layout::COMMAND_BAR_HEIGHT);
+                                       SurgeBox::Layout::DIVIDER_HEIGHT -
+                                       SurgeBox::Layout::MENU_BAR_HEIGHT);
         resized();
         repaint();
     }
@@ -405,6 +505,13 @@ void SurgeBoxEditor::rebuildInstrumentEditor()
                 surgeSynthEditor->drawExtendedControls = false;
                 surgeSynthEditor->resized();
             }
+            else
+            {
+                // Non-Surge editors (Dexed, etc.) should use the default JUCE
+                // LookAndFeel so their custom knobs/sliders render correctly,
+                // rather than inheriting SurgeBoxLookAndFeel.
+                instrumentEditor_->setLookAndFeel(&juce::LookAndFeel::getDefaultLookAndFeel());
+            }
 
             instrumentEditorWrapper_ = std::make_unique<juce::Component>();
             instrumentEditorWrapper_->addAndMakeVisible(*instrumentEditor_);
@@ -413,6 +520,22 @@ void SurgeBoxEditor::rebuildInstrumentEditor()
             currentEditorVoice_ = newVoice;
 
             updateInstrumentEditorScale();
+        }
+        else
+        {
+            // Processor returned no editor — show placeholder message
+            auto placeholder = std::make_unique<juce::Component>();
+            auto* label = new juce::Label("placeholder",
+                "Instrument not available\n\n" + proc->getName());
+            label->setJustificationType(juce::Justification::centred);
+            label->setFont(juce::Font(18.0f));
+            label->setColour(juce::Label::textColourId, juce::Colours::grey);
+            label->setBounds(0, 0, 600, 200);
+            placeholder->addAndMakeVisible(label);
+            placeholder->setSize(600, 200);
+
+            instrumentViewport_->setViewedComponent(placeholder.release(), true);
+            currentEditorVoice_ = newVoice;
         }
     }
 }
@@ -444,6 +567,23 @@ void SurgeBoxEditor::onVoiceChanged(int voice)
     auto* model = engine_.getActivePatternModel();
     pianoRoll_->setPatternModel(model);
 
+    // Restrict piano roll to valid drum pitches when TR-808 is active
+    if (engine_.getInstrumentType(voice) == SurgeBox::InstrumentType::TR808)
+    {
+        std::vector<int> drumPitches;
+        for (int i = 0; i < SurgeBox::TR808Processor::NUM_DRUM_VOICES; i++)
+        {
+            auto dv = static_cast<SurgeBox::TR808Processor::DrumVoice>(i);
+            drumPitches.push_back(SurgeBox::TR808Processor::midiNoteForVoice(dv));
+        }
+        std::sort(drumPitches.begin(), drumPitches.end());
+        pianoRoll_->setFixedPitches(drumPitches);
+    }
+    else
+    {
+        pianoRoll_->setFixedPitches({});
+    }
+
     commandBar_->updateMeasuresLabel();
 
     double multiplier = engine_.getProject().voices[voice].tempoMultiplier.load();
@@ -454,7 +594,7 @@ void SurgeBoxEditor::onVoiceChanged(int voice)
     if (!showingMasterFX_)
         rebuildInstrumentEditor();
 
-    commandBar_->getVoiceSelector().repaint();
+    commandBar_->getVoiceSelector().selectVoice(voice);
     resized();
 }
 

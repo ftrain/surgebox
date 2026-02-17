@@ -18,13 +18,21 @@ VoiceSelector::VoiceSelector()
 
     multiSwitch_ = std::make_unique<Widgets::MultiSwitch>();
     multiSwitch_->setRows(1);
-    multiSwitch_->setColumns(NUM_VOICES);
-    multiSwitch_->setLabels({"1", "2", "3", "4"});
+    multiSwitch_->setColumns(NUM_VOICES + 1);
+    multiSwitch_->setLabels({"1", "2", "3", "4", "FX"});
 
-    multiSwitch_->onValueChanged = [this](int voice) {
-        if (engine_)
+    multiSwitch_->onValueChanged = [this](int index) {
+        if (index == NUM_VOICES)
         {
-            engine_->setActiveVoice(voice);
+            if (onFXSelected)
+                onFXSelected(true);
+        }
+        else
+        {
+            if (onFXSelected)
+                onFXSelected(false);
+            if (engine_)
+                engine_->setActiveVoice(index);
         }
     };
 
@@ -38,6 +46,16 @@ void VoiceSelector::setEngine(SurgeBoxEngine *engine)
     {
         multiSwitch_->setValue(engine_->getActiveVoice());
     }
+}
+
+void VoiceSelector::selectVoice(int voice)
+{
+    multiSwitch_->setValue(voice);
+}
+
+void VoiceSelector::selectFX()
+{
+    multiSwitch_->setValue(NUM_VOICES);
 }
 
 void VoiceSelector::resized()

@@ -5,7 +5,7 @@
  * Released under the GNU General Public Licence v3 or later (GPL-3.0-or-later).
  * https://www.gnu.org/licenses/gpl-3.0.en.html
  *
- * Command bar containing voice selector, transport, scale picker, and measure buttons.
+ * Menu bar with dropdown menus, voice selector, instrument picker, and transport.
  */
 
 #pragma once
@@ -22,27 +22,21 @@ namespace SurgeBox
 class SurgeBoxEngine;
 class PatternModel;
 
-class CommandBar : public juce::Component,
-                   public juce::Button::Listener,
-                   public juce::ComboBox::Listener,
-                   public juce::Slider::Listener
+class CommandBar : public juce::Component
 {
   public:
     explicit CommandBar(SurgeBoxEngine& engine);
     ~CommandBar() override = default;
 
     void resized() override;
-    void buttonClicked(juce::Button* button) override;
-    void comboBoxChanged(juce::ComboBox* comboBox) override;
-    void sliderValueChanged(juce::Slider* slider) override;
 
     void updateMeasuresLabel();
     void updateTempoMultiplier(double multiplier);
+    void setTempo(double bpm);
 
     // Access components for external listeners
     VoiceSelector& getVoiceSelector() { return *voiceSelector_; }
     TransportControls& getTransportControls() { return *transport_; }
-    juce::TextButton& getStepRecordButton() { return *stepRecordButton_; }
 
     // Callbacks
     std::function<void(bool)> onStepRecordChanged;
@@ -50,49 +44,41 @@ class CommandBar : public juce::Component,
     std::function<void(int, ScaleType)> onScaleChanged;
     std::function<void()> onClearPattern;
     std::function<void()> onMeasuresChanged;
-    std::function<void(bool)> onMasterFXToggled;
     std::function<void(SurgeBox::InstrumentType)> onInstrumentChanged;
+    std::function<void()> onSavePreset;
+    std::function<void()> onLoadPreset;
 
     void updateInstrumentSelector();
 
   private:
     SurgeBoxEngine& engine_;
 
+    // Menu buttons
+    juce::TextButton patternMenuBtn_{"Pattern"};
+    juce::TextButton editMenuBtn_{"Edit"};
+    juce::TextButton scaleMenuBtn_{"Scale"};
+    juce::TextButton viewMenuBtn_{"View"};
+
+    // Direct widgets (right side)
     std::unique_ptr<VoiceSelector> voiceSelector_;
     std::unique_ptr<TransportControls> transport_;
-
-    std::unique_ptr<juce::TextButton> stepRecordButton_;
-
-    // Measure controls
-    std::unique_ptr<juce::TextButton> measuresDoubleBtn_;
-    std::unique_ptr<juce::TextButton> measuresHalfBtn_;
-    std::unique_ptr<juce::TextButton> measuresAddBtn_;
-    std::unique_ptr<juce::TextButton> measuresSubBtn_;
-    std::unique_ptr<juce::Label> measuresLabel_;
-
-    // Grid size
-    std::unique_ptr<juce::ComboBox> gridSizeCombo_;
-    std::unique_ptr<juce::Label> gridSizeLabel_;
-
-    // Scale picker
-    std::unique_ptr<juce::ComboBox> scaleRootCombo_;
-    std::unique_ptr<juce::ComboBox> scaleTypeCombo_;
-    std::unique_ptr<juce::Label> scaleLabel_;
-
-    // Clear pattern button
-    std::unique_ptr<juce::TextButton> clearPatternBtn_;
-
-    // Tempo control
-    std::unique_ptr<juce::Slider> tempoSlider_;
-    std::unique_ptr<juce::Label> tempoLabel_;
-    std::unique_ptr<juce::ComboBox> tempoMultiplierCombo_;
-
-    // Master FX toggle
-    std::unique_ptr<juce::TextButton> masterFXButton_;
-
-    // Instrument selector
     std::unique_ptr<juce::ComboBox> instrumentCombo_;
     std::unique_ptr<juce::Label> instrumentLabel_;
+
+    // Internal state for menu ticks
+    int gridSizeId_{3};         // 1=1/4, 2=1/8, 3=1/16, 4=1/32
+    int scaleRootId_{1};        // 1=C, 2=C#, ...
+    int scaleTypeId_{1};        // 1=Chromatic, 2=Major, ...
+    int tempoMultiplierId_{3};  // 1=4x, 2=2x, 3=1x, ...
+    bool stepRecordEnabled_{false};
+    bool midiLearnActive_{false};
+    int currentBars_{1};
+    double currentTempo_{120.0};
+
+    void showPatternMenu();
+    void showEditMenu();
+    void showScaleMenu();
+    void showViewMenu();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CommandBar)
 };

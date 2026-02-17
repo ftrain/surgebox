@@ -16,6 +16,7 @@
 #include "gui/widgets/MasterFXEditor.h"
 #include "gui/SurgeBoxLookAndFeel.h"
 #include "gui/Layout.h"
+#include "core/VoicePreset.h"
 
 class SurgeBoxEditor : public juce::AudioProcessorEditor,
                        public juce::Timer,

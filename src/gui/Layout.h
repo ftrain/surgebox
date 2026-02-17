@@ -15,8 +15,8 @@ namespace SurgeBox
 namespace Layout
 {
 
-// Command bar
-constexpr int COMMAND_BAR_HEIGHT = 44;
+// Menu bar (top)
+constexpr int MENU_BAR_HEIGHT = 32;
 
 // Piano keyboard
 constexpr int PIANO_KEYBOARD_HEIGHT = 30;

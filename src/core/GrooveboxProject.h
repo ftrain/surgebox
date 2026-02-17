@@ -38,6 +38,7 @@ static constexpr int FX_PARAMS_PER_SLOT = 12;
 
 enum class InstrumentType : int
 {
+    Unknown = -1,
     SurgeXT = 0,
     Dexed = 1,
     TR808 = 2
@@ -161,6 +162,8 @@ struct VoiceState
 // Groovebox Project
 // ============================================================================
 
+class MidiMappingEngine; // forward declaration
+
 class GrooveboxProject
 {
   public:
@@ -176,6 +179,9 @@ class GrooveboxProject
     std::string author;
     std::string comment;
     std::vector<std::string> tags;
+
+    // Optional pointer to MIDI mapping engine for serialization
+    MidiMappingEngine *midiMappingEngine{nullptr};
 
     GrooveboxProject();
 
