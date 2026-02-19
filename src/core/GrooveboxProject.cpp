@@ -63,6 +63,234 @@ MIDINote MIDINote::fromXML(TiXmlElement *element)
 }
 
 // ============================================================================
+// KernelCell
+// ============================================================================
+
+void KernelCell::toXML(TiXmlElement *parent) const
+{
+    TiXmlElement cellEl("cell");
+    cellEl.SetAttribute("pitch", pitchOffset);
+    cellEl.SetDoubleAttribute("time", timeOffset);
+    cellEl.SetDoubleAttribute("vel", velocityScale);
+    cellEl.SetDoubleAttribute("prob", probability);
+    parent->InsertEndChild(cellEl);
+}
+
+KernelCell KernelCell::fromXML(TiXmlElement *element)
+{
+    KernelCell cell;
+    element->QueryIntAttribute("pitch", &cell.pitchOffset);
+    element->QueryDoubleAttribute("time", &cell.timeOffset);
+
+    double vel = 1.0, prob = 1.0;
+    element->QueryDoubleAttribute("vel", &vel);
+    element->QueryDoubleAttribute("prob", &prob);
+    cell.velocityScale = static_cast<float>(vel);
+    cell.probability = static_cast<float>(prob);
+    return cell;
+}
+
+// ============================================================================
+// PatternKernel
+// ============================================================================
+
+void PatternKernel::toXML(TiXmlElement *parent) const
+{
+    if (mode == KernelMode::Off)
+        return;
+
+    TiXmlElement kernelEl("kernel");
+    kernelEl.SetAttribute("mode", static_cast<int>(mode));
+    kernelEl.SetAttribute("scaleAware", scaleAware ? 1 : 0);
+    kernelEl.SetAttribute("scaleRoot", scaleRoot);
+    kernelEl.SetAttribute("scaleType", scaleType);
+    kernelEl.SetAttribute("pivotPitch", pivotPitch);
+    kernelEl.SetAttribute("accumulateSemitones", accumulateSemitones);
+    kernelEl.SetAttribute("resetAfter", resetAfterIterations);
+    kernelEl.SetAttribute("seed", static_cast<int>(seed));
+
+    for (const auto &cell : cells)
+        cell.toXML(&kernelEl);
+
+    parent->InsertEndChild(kernelEl);
+}
+
+void PatternKernel::fromXML(TiXmlElement *element)
+{
+    int modeInt = 0;
+    element->QueryIntAttribute("mode", &modeInt);
+    mode = static_cast<KernelMode>(std::clamp(modeInt, 0, 4));
+
+    int sa = 1;
+    element->QueryIntAttribute("scaleAware", &sa);
+    scaleAware = (sa != 0);
+
+    element->QueryIntAttribute("scaleRoot", &scaleRoot);
+    element->QueryIntAttribute("scaleType", &scaleType);
+    element->QueryIntAttribute("pivotPitch", &pivotPitch);
+    element->QueryIntAttribute("accumulateSemitones", &accumulateSemitones);
+    element->QueryIntAttribute("resetAfter", &resetAfterIterations);
+
+    int seedInt = 0;
+    element->QueryIntAttribute("seed", &seedInt);
+    seed = static_cast<uint32_t>(seedInt);
+
+    cells.clear();
+    for (TiXmlElement *cellEl = element->FirstChildElement("cell"); cellEl;
+         cellEl = cellEl->NextSiblingElement("cell"))
+    {
+        cells.push_back(KernelCell::fromXML(cellEl));
+    }
+}
+
+// ============================================================================
+// Kernel Presets
+// ============================================================================
+
+namespace KernelPresets
+{
+
+PatternKernel arpeggioUp()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Identity (original note) + major 3rd at +1/4 beat + perfect 5th at +1/2 beat
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.25, 0.85f, 1.0f},
+        {7, 0.5, 0.7f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel arpeggioDown()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Start high, descend: 5th, 3rd, root
+    k.cells = {
+        {7, 0.0, 1.0f, 1.0f},
+        {4, 0.25, 0.85f, 1.0f},
+        {0, 0.5, 0.7f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel arpeggioUpDown()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Root -> 3rd -> 5th -> octave -> 5th -> 3rd (6 cells over 1.5 beats)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.25, 0.9f, 1.0f},
+        {7, 0.5, 0.8f, 1.0f},
+        {12, 0.75, 0.85f, 1.0f},
+        {7, 1.0, 0.75f, 1.0f},
+        {4, 1.25, 0.65f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel chord()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Simultaneous major triad (no time offset)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.0, 0.85f, 1.0f},
+        {7, 0.0, 0.75f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel octaveDouble()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {12, 0.0, 0.7f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel echo()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    // Three echoes: original + two repeats with decay
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {0, 0.75, 0.5f, 1.0f},
+        {0, 1.5, 0.25f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel strum()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Micro-timed chord spread (guitar-like)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.03, 0.9f, 1.0f},
+        {7, 0.06, 0.85f, 1.0f},
+        {12, 0.09, 0.8f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel probabilityThin()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    // Only cell is the identity with 60% probability — 40% of notes drop out
+    k.cells = {
+        {0, 0.0, 1.0f, 0.6f},
+    };
+    return k;
+}
+
+PatternKernel risingSequence()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+    };
+    // Rise 1 semitone per iteration, reset after 12 (full octave cycle)
+    k.accumulateSemitones = 1;
+    k.resetAfterIterations = 12;
+    return k;
+}
+
+PatternKernel invertMelody(int pivot)
+{
+    PatternKernel k;
+    k.mode = KernelMode::Invert;
+    k.pivotPitch = pivot;
+    // Identity cell required (the inversion replaces pitch)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+    };
+    return k;
+}
+
+} // namespace KernelPresets
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -222,6 +450,8 @@ void Pattern::toXML(TiXmlElement *parent) const
     for (const auto &note : notes)
         note.toXML(&patternEl);
 
+    kernel.toXML(&patternEl);
+
     parent->InsertEndChild(patternEl);
 }
 
@@ -249,6 +479,10 @@ void Pattern::fromXML(TiXmlElement *element)
     {
         notes.push_back(MIDINote::fromXML(noteEl));
     }
+
+    if (TiXmlElement *kernelEl = element->FirstChildElement("kernel"))
+        kernel.fromXML(kernelEl);
+
     sortNotes();
     rebuildLoopNotes();
 }

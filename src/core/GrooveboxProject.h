@@ -102,6 +102,73 @@ struct LoopRegion
 };
 
 // ============================================================================
+// Pattern Kernel — matrix transformation applied per-note at playback time
+// ============================================================================
+
+// A single kernel cell: defines one derived note relative to each source note
+struct KernelCell
+{
+    int pitchOffset{0};         // Semitones relative to source note
+    double timeOffset{0.0};     // Beats relative to source note start
+    float velocityScale{1.0f};  // Multiply source velocity (0.0–1.0)
+    float probability{1.0f};    // Chance this cell fires (0.0–1.0)
+
+    void toXML(TiXmlElement *parent) const;
+    static KernelCell fromXML(TiXmlElement *element);
+};
+
+// How the kernel interacts with the source pattern
+enum class KernelMode : int
+{
+    Off = 0,        // Kernel disabled, play pattern as-is
+    Spawn = 1,      // Each source note spawns additional notes from kernel cells
+    Transform = 2,  // Kernel cells replace the source note (first cell = the note)
+    Invert = 3,     // Mirror pitches around pivotPitch
+    Retrograde = 4  // Reverse the time axis of the pattern
+};
+
+struct PatternKernel
+{
+    KernelMode mode{KernelMode::Off};
+    std::vector<KernelCell> cells;
+
+    // Scale-awareness: snap kernel-generated pitches to this scale
+    bool scaleAware{true};       // When true, pitchOffsets are in scale degrees, not semitones
+    int scaleRoot{0};            // MIDI note number of scale root (0=C)
+    int scaleType{0};            // Maps to ScaleType enum
+
+    // Pivot for Invert mode
+    int pivotPitch{60};          // Center pitch for melodic inversion
+
+    // Iteration behavior (how kernel evolves across pattern loops)
+    int accumulateSemitones{0};  // Add N semitones per iteration (rising/falling sequences)
+    int resetAfterIterations{0}; // Reset accumulation after N iterations (0 = never)
+
+    // Probability seed — 0 means use random seed each loop (fresh variation)
+    uint32_t seed{0};
+
+    bool isActive() const { return mode != KernelMode::Off && !cells.empty(); }
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
+};
+
+// Factory presets for common musical kernels
+namespace KernelPresets
+{
+    PatternKernel arpeggioUp();         // Major triad rising
+    PatternKernel arpeggioDown();       // Major triad falling
+    PatternKernel arpeggioUpDown();     // Up then down
+    PatternKernel chord();              // Simultaneous major triad
+    PatternKernel octaveDouble();       // Double an octave up
+    PatternKernel echo();               // Rhythmic echo with decay
+    PatternKernel strum();              // Guitar-like micro-timing
+    PatternKernel probabilityThin();    // Random note dropout
+    PatternKernel risingSequence();     // Transpose up 1 semitone per iteration
+    PatternKernel invertMelody(int pivot = 60);  // Melodic inversion
+} // namespace KernelPresets
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -111,6 +178,7 @@ struct Pattern
     int bars{4};
     double swing{0.0};
     std::vector<LoopRegion> loopRegions;
+    PatternKernel kernel;
 
     double lengthInBeats() const { return bars * 4.0; }
 
