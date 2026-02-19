@@ -127,7 +127,78 @@ std::vector<const MIDINote *> Pattern::getNotesStartingInRange(double startBeat,
         if (note.startBeat >= startBeat - epsilon && note.startBeat < endBeat)
             result.push_back(&note);
     }
+
+    // Include looped (ghost) notes
+    size_t loopedCount = 0;
+    for (const auto &note : loopedNotes_)
+    {
+        if (note.startBeat >= startBeat - epsilon && note.startBeat < endBeat)
+        {
+            result.push_back(&note);
+            loopedCount++;
+        }
+    }
+    if (loopedCount > 0)
+        DBG("getNotesStartingInRange [" << startBeat << "," << endBeat << "]: " << loopedCount
+                                        << " looped notes (total loopedNotes_=" << loopedNotes_.size() << ")");
+
     return result;
+}
+
+void Pattern::rebuildLoopNotes()
+{
+    loopedNotes_.clear();
+
+    double patLen = lengthInBeats();
+
+    DBG("rebuildLoopNotes: " << loopRegions.size() << " regions, " << notes.size()
+                             << " notes, patLen=" << patLen);
+
+    for (const auto &lr : loopRegions)
+    {
+        if (!lr.active || lr.length() <= 0.0)
+        {
+            DBG("  skipping region: active=" << lr.active << " length=" << lr.length());
+            continue;
+        }
+        DBG("  region: beats=[" << lr.startBeat << "," << lr.endBeat
+                                << "] pitches=[" << lr.minPitch << "," << lr.maxPitch << "]");
+
+        double loopLen = lr.length();
+
+        for (const auto &note : notes)
+        {
+            if (note.startBeat < lr.startBeat || note.startBeat >= lr.endBeat)
+                continue;
+            if (!lr.containsPitch(note.pitch))
+                continue;
+
+            for (double offset = loopLen; lr.startBeat + offset < patLen; offset += loopLen)
+            {
+                double ghostBeat = note.startBeat + offset;
+                if (ghostBeat >= patLen)
+                    break;
+
+                double ghostDur = std::min(static_cast<double>(note.duration), patLen - ghostBeat);
+                loopedNotes_.emplace_back(ghostBeat, ghostDur, note.pitch, note.velocity);
+            }
+        }
+    }
+
+    DBG("  generated " << loopedNotes_.size() << " looped notes");
+
+    // Deduplicate: sort and remove notes at the same beat+pitch
+    if (loopedNotes_.size() > 1)
+    {
+        std::sort(loopedNotes_.begin(), loopedNotes_.end());
+        constexpr double beatEps = 0.001;
+        auto it = std::unique(loopedNotes_.begin(), loopedNotes_.end(),
+                              [beatEps](const MIDINote &a, const MIDINote &b) {
+                                  return a.pitch == b.pitch &&
+                                         std::abs(a.startBeat - b.startBeat) < beatEps;
+                              });
+        loopedNotes_.erase(it, loopedNotes_.end());
+    }
 }
 
 void Pattern::toXML(TiXmlElement *parent) const
@@ -135,6 +206,18 @@ void Pattern::toXML(TiXmlElement *parent) const
     TiXmlElement patternEl("pattern");
     patternEl.SetAttribute("bars", bars);
     patternEl.SetDoubleAttribute("swing", swing);
+
+    for (const auto &lr : loopRegions)
+    {
+        if (!lr.active)
+            continue;
+        TiXmlElement loopEl("loop");
+        loopEl.SetDoubleAttribute("startBeat", lr.startBeat);
+        loopEl.SetDoubleAttribute("endBeat", lr.endBeat);
+        loopEl.SetAttribute("minPitch", lr.minPitch);
+        loopEl.SetAttribute("maxPitch", lr.maxPitch);
+        patternEl.InsertEndChild(loopEl);
+    }
 
     for (const auto &note : notes)
         note.toXML(&patternEl);
@@ -145,8 +228,21 @@ void Pattern::toXML(TiXmlElement *parent) const
 void Pattern::fromXML(TiXmlElement *element)
 {
     notes.clear();
+    loopRegions.clear();
     element->QueryIntAttribute("bars", &bars);
     element->QueryDoubleAttribute("swing", &swing);
+
+    for (TiXmlElement *loopEl = element->FirstChildElement("loop"); loopEl;
+         loopEl = loopEl->NextSiblingElement("loop"))
+    {
+        LoopRegion lr;
+        lr.active = true;
+        loopEl->QueryDoubleAttribute("startBeat", &lr.startBeat);
+        loopEl->QueryDoubleAttribute("endBeat", &lr.endBeat);
+        loopEl->QueryIntAttribute("minPitch", &lr.minPitch);
+        loopEl->QueryIntAttribute("maxPitch", &lr.maxPitch);
+        loopRegions.push_back(lr);
+    }
 
     for (TiXmlElement *noteEl = element->FirstChildElement("note"); noteEl;
          noteEl = noteEl->NextSiblingElement("note"))
@@ -154,6 +250,7 @@ void Pattern::fromXML(TiXmlElement *element)
         notes.push_back(MIDINote::fromXML(noteEl));
     }
     sortNotes();
+    rebuildLoopNotes();
 }
 
 // ============================================================================

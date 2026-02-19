@@ -181,16 +181,6 @@ void TR808Processor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBu
     // Apply any parameter changes
     applyParams();
 
-    // Handle MIDI
-    for (const auto metadata : midiMessages)
-    {
-        auto msg = metadata.getMessage();
-        if (msg.isNoteOn())
-            handleNoteOn(msg.getNoteNumber(), msg.getVelocity());
-        else if (msg.isNoteOff())
-            handleNoteOff(msg.getNoteNumber());
-    }
-
     int numSamples = buffer.getNumSamples();
 
     // Ensure stereo output
@@ -200,8 +190,27 @@ void TR808Processor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBu
     float *outL = buffer.getWritePointer(0);
     float *outR = buffer.getWritePointer(1);
 
+    // Process sample-by-sample, triggering MIDI at correct sample positions
+    auto midiIt = midiMessages.cbegin();
+
     for (int i = 0; i < numSamples; i++)
     {
+        // Dispatch any MIDI events scheduled at this sample position
+        while (midiIt != midiMessages.cend())
+        {
+            auto metadata = *midiIt;
+            if (metadata.samplePosition > i)
+                break;
+
+            auto msg = metadata.getMessage();
+            if (msg.isNoteOn())
+                handleNoteOn(msg.getNoteNumber(), msg.getVelocity());
+            else if (msg.isNoteOff())
+                handleNoteOff(msg.getNoteNumber());
+
+            ++midiIt;
+        }
+
         float l = 0.0f, r = 0.0f;
         float vl, vr;
 

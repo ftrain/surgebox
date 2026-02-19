@@ -75,25 +75,56 @@ class TR808Processor : public juce::AudioProcessor
     {
         switch (v)
         {
-            case Kick:     return 36;  // C1
-            case Snare:    return 38;  // D1
-            case ClosedHH: return 42;  // F#1
-            case OpenHH:   return 46;  // A#1
-            case Clap:     return 39;  // D#1
-            case TomHi:    return 48;  // C2
-            case TomMid:   return 45;  // A1
-            case TomLow:   return 41;  // F1
-            case Cymbal:   return 49;  // C#2
-            case Cowbell:  return 56;  // G#1
-            case Rimshot:  return 37;  // C#1
-            case Claves:   return 75;  // D#4
-            case Maracas:  return 70;  // A#3
+            case Kick:     return 36;  // C2
+            case Snare:    return 38;  // D2
+            case ClosedHH: return 42;  // F#2
+            case OpenHH:   return 46;  // A#2
+            case Clap:     return 39;  // D#2
+            case TomHi:    return 48;  // C3
+            case TomMid:   return 45;  // A2
+            case TomLow:   return 41;  // F2
+            case Cymbal:   return 49;  // C#3
+            case Cowbell:  return 56;  // G#3
+            case Rimshot:  return 37;  // C#2
+            case Claves:   return 75;  // D#5
+            case Maracas:  return 70;  // A#4
             default:       return -1;
         }
     }
 
     // Reverse lookup: MIDI note → drum voice index (-1 if unmapped)
     static int drumVoiceForMidiNote(int note);
+
+    // Human-readable name for a drum voice
+    static constexpr const char* nameForVoice(DrumVoice v)
+    {
+        switch (v)
+        {
+            case Kick:     return "Kick";
+            case Snare:    return "Snare";
+            case ClosedHH: return "CH";
+            case OpenHH:   return "OH";
+            case Clap:     return "Clap";
+            case TomHi:    return "HiTom";
+            case TomMid:   return "MdTom";
+            case TomLow:   return "LoTom";
+            case Cymbal:   return "Cym";
+            case Cowbell:  return "Cow";
+            case Rimshot:  return "Rim";
+            case Claves:   return "Clav";
+            case Maracas:  return "Mar";
+            default:       return "";
+        }
+    }
+
+    // Lookup drum voice name by MIDI note (empty string if unmapped)
+    static const char* nameForMidiNote(int note)
+    {
+        int idx = drumVoiceForMidiNote(note);
+        if (idx >= 0 && idx < NUM_DRUM_VOICES)
+            return nameForVoice(static_cast<DrumVoice>(idx));
+        return "";
+    }
 
     // Per-voice parameter access (0-1 normalized)
     struct VoiceParams

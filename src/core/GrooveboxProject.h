@@ -86,6 +86,22 @@ struct MIDINote
 };
 
 // ============================================================================
+// Loop Region — non-destructive tiling of a beat range
+// ============================================================================
+
+struct LoopRegion
+{
+    double startBeat{0.0};
+    double endBeat{0.0};
+    int minPitch{0};
+    int maxPitch{127};
+    bool active{false};
+
+    double length() const { return endBeat - startBeat; }
+    bool containsPitch(int pitch) const { return pitch >= minPitch && pitch <= maxPitch; }
+};
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -94,6 +110,7 @@ struct Pattern
     std::vector<MIDINote> notes;
     int bars{4};
     double swing{0.0};
+    std::vector<LoopRegion> loopRegions;
 
     double lengthInBeats() const { return bars * 4.0; }
 
@@ -107,8 +124,15 @@ struct Pattern
     std::vector<MIDINote *> getNotesInRange(double startBeat, double endBeat);
     std::vector<const MIDINote *> getNotesStartingInRange(double startBeat, double endBeat) const;
 
+    // Rebuild cached loop notes from source region
+    void rebuildLoopNotes();
+
     void toXML(TiXmlElement *parent) const;
     void fromXML(TiXmlElement *element);
+
+  private:
+    // Cached looped copies (rebuilt when notes or loop region change)
+    std::vector<MIDINote> loopedNotes_;
 };
 
 // ============================================================================

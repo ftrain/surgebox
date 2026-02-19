@@ -40,6 +40,10 @@ class PianoKeyboardWidget : public juce::Component
     void setScale(int root, ScaleType type);
     void setVisiblePitches(const std::vector<int>& pitches);
 
+    // Drum mode — wider keys with drum voice labels
+    void setDrumMode(bool enabled);
+    bool isDrumMode() const { return drumMode_; }
+
     // Note preview callbacks
     std::function<void(int pitch, int velocity)> onNoteOn;
     std::function<void(int pitch)> onNoteOff;
@@ -69,6 +73,9 @@ class PianoKeyboardWidget : public juce::Component
     int getPitchAtX(int x) const;
     void playNote(int pitch);
     void stopNote(int pitch);
+
+    // Drum mode
+    bool drumMode_{false};
 
     // Colors
     juce::Colour whiteKeyColor_{0xffe8e8e8};

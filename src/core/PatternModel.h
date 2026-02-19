@@ -64,6 +64,18 @@ class PatternModel : public juce::ValueTree::Listener
     // Batch operations (grouped as single undo)
     void beginTransaction(const juce::String &name);
 
+    // Loop regions (non-destructive tiling, multiple allowed)
+    void addLoopRegion(double startBeat, double endBeat, int minPitch, int maxPitch);
+    void removeLoopRegion(size_t index);
+    void resizeLoopRegion(size_t index, double startBeat, double endBeat, int minPitch, int maxPitch);
+    void clearLoopRegions();
+    bool hasLoopRegions() const { return !loopRegions_.empty(); }
+    int getNumLoopRegions() const { return static_cast<int>(loopRegions_.size()); }
+    const std::vector<LoopRegion>& getLoopRegions() const { return loopRegions_; }
+    std::vector<LoopRegion>& getLoopRegionsMutable() { return loopRegions_; }
+    int findLoopRegionAt(double beat, int pitch) const;
+    void notifyLoopChanged();
+
     // Query
     int getNumNotes() const;
     bool getNoteAt(int index, double &startBeat, double &duration, int &pitch, int &velocity) const;
@@ -99,6 +111,7 @@ class PatternModel : public juce::ValueTree::Listener
     juce::ValueTree tree_;
     juce::UndoManager *undoManager_{nullptr};
     Pattern *autoSyncPattern_{nullptr};
+    std::vector<LoopRegion> loopRegions_;
 
     // Helper to create a note ValueTree
     static juce::ValueTree createNoteTree(double startBeat, double duration, int pitch,

@@ -188,14 +188,42 @@ void drawStepCursor(juce::Graphics& g, const juce::Rectangle<int>& area,
 }
 
 void drawBoxSelection(juce::Graphics& g, const juce::Point<int>& start,
-                      const juce::Point<int>& end)
+                      const juce::Point<int>& end, const juce::Rectangle<int>& area,
+                      const RenderParams& params)
 {
     auto selRect = juce::Rectangle<int>(start, end);
 
-    g.setColour(Theme::color(Theme::boxSelect));
-    g.fillRect(selRect);
+    // Compute which grid cells are inside the selection
+    double beatStart = (std::min(start.y, end.y) - area.getY()) / params.pixelsPerBeat;
+    double beatEnd = (std::max(start.y, end.y) - area.getY()) / params.pixelsPerBeat;
+    int colStart = (std::min(start.x, end.x) - area.getX()) / params.noteWidth;
+    int colEnd = (std::max(start.x, end.x) - area.getX()) / params.noteWidth;
 
-    g.setColour(Theme::color(Theme::noteColor));
+    double gridBeatStart = std::floor(beatStart / params.gridSize) * params.gridSize;
+    double gridBeatEnd = std::ceil(beatEnd / params.gridSize) * params.gridSize;
+
+    int numCols = params.visiblePitches ? static_cast<int>(params.visiblePitches->size()) : 0;
+    colStart = std::max(0, colStart);
+    colEnd = std::min(colEnd, numCols - 1);
+
+    // Highlight each grid cell within the selection
+    auto cellColor = Theme::color(Theme::noteColor).withAlpha(0.15f);
+    g.setColour(cellColor);
+
+    for (double beat = gridBeatStart; beat < gridBeatEnd; beat += params.gridSize)
+    {
+        int cellY = area.getY() + static_cast<int>(beat * params.pixelsPerBeat);
+        int cellH = static_cast<int>(params.gridSize * params.pixelsPerBeat);
+
+        for (int col = colStart; col <= colEnd; ++col)
+        {
+            int cellX = area.getX() + col * params.noteWidth;
+            g.fillRect(cellX + 1, cellY, params.noteWidth - 2, cellH);
+        }
+    }
+
+    // Draw selection border
+    g.setColour(Theme::color(Theme::noteColor).withAlpha(0.6f));
     g.drawRect(selRect, 1);
 }
 
@@ -257,6 +285,106 @@ int columnToPitch(int column, const RenderParams& params)
         column >= static_cast<int>(params.visiblePitches->size()))
         return -1;
     return (*params.visiblePitches)[column];
+}
+
+void drawGhostNotes(juce::Graphics& g, const juce::Rectangle<int>& area,
+                    const std::vector<GhostNote>& ghosts, const RenderParams& params)
+{
+    for (const auto& ghost : ghosts)
+    {
+        int noteCol = pitchToColumn(ghost.pitch, params);
+        if (noteCol < 0)
+            noteCol = ghost.pitch - params.lowestNote;
+
+        int x = area.getX() + (noteCol * params.noteWidth) + 1;
+        int y = area.getY() + static_cast<int>(ghost.beat * params.pixelsPerBeat);
+        int h = std::max(6, static_cast<int>(ghost.duration * params.pixelsPerBeat));
+        int w = params.noteWidth - 2;
+
+        auto rect = juce::Rectangle<int>(x, y, w, h).toFloat();
+
+        g.setColour(Theme::color(Theme::noteColor).withAlpha(0.25f));
+        g.fillRoundedRectangle(rect, 3.0f);
+
+        g.setColour(Theme::color(Theme::noteColor).withAlpha(0.15f));
+        g.drawRoundedRectangle(rect, 3.0f, 1.0f);
+    }
+}
+
+void drawLoopRegion(juce::Graphics& g, const juce::Rectangle<int>& area,
+                    double loopStartBeat, double loopEndBeat,
+                    int minPitch, int maxPitch,
+                    double patternLengthBeats, const RenderParams& params,
+                    bool selected)
+{
+    double loopLen = loopEndBeat - loopStartBeat;
+    if (loopLen <= 0.0)
+        return;
+
+    // Compute horizontal bounds by finding the first and last visible pitch
+    // within the loop's pitch range (handles scale changes gracefully)
+    int minCol = -1, maxCol = -1;
+    if (params.visiblePitches)
+    {
+        for (int i = 0; i < static_cast<int>(params.visiblePitches->size()); ++i)
+        {
+            int p = (*params.visiblePitches)[i];
+            if (p >= minPitch && p <= maxPitch)
+            {
+                if (minCol < 0) minCol = i;
+                maxCol = i;
+            }
+        }
+    }
+    if (minCol < 0 || maxCol < 0)
+        return;
+
+    int x = area.getX() + minCol * params.noteWidth;
+    int w = (maxCol - minCol + 1) * params.noteWidth;
+
+    // Draw source region box
+    int sourceY = area.getY() + static_cast<int>(loopStartBeat * params.pixelsPerBeat);
+    int sourceH = static_cast<int>(loopLen * params.pixelsPerBeat);
+
+    float fillAlpha = selected ? 0.25f : 0.15f;
+    float borderAlpha = selected ? 0.9f : 0.6f;
+    int borderWidth = selected ? 3 : 2;
+
+    g.setColour(Theme::color(Theme::accent).withAlpha(fillAlpha));
+    g.fillRect(x, sourceY, w, sourceH);
+    g.setColour(Theme::color(Theme::accent).withAlpha(borderAlpha));
+    g.drawRect(x, sourceY, w, sourceH, borderWidth);
+
+    // Draw edge handles when selected (fully inside the region)
+    if (selected)
+    {
+        auto handleColor = Theme::color(Theme::accent).withAlpha(0.8f);
+        g.setColour(handleColor);
+        int hw = 12, hh = 5;
+        // Top edge center (inside)
+        g.fillRect(x + w / 2 - hw / 2, sourceY + borderWidth, hw, hh);
+        // Bottom edge center (inside)
+        g.fillRect(x + w / 2 - hw / 2, sourceY + sourceH - borderWidth - hh, hw, hh);
+        // Left edge center (inside)
+        g.fillRect(x + borderWidth, sourceY + sourceH / 2 - hw / 2, hh, hw);
+        // Right edge center (inside)
+        g.fillRect(x + w - borderWidth - hh, sourceY + sourceH / 2 - hw / 2, hh, hw);
+    }
+
+    // Draw repetition boxes
+    for (double offset = loopLen; loopStartBeat + offset < patternLengthBeats; offset += loopLen)
+    {
+        double repStart = loopStartBeat + offset;
+        double repEnd = std::min(repStart + loopLen, patternLengthBeats);
+
+        int repY = area.getY() + static_cast<int>(repStart * params.pixelsPerBeat);
+        int repH = static_cast<int>((repEnd - repStart) * params.pixelsPerBeat);
+
+        g.setColour(Theme::color(Theme::accent).withAlpha(0.08f));
+        g.fillRect(x, repY, w, repH);
+        g.setColour(Theme::color(Theme::accent).withAlpha(0.3f));
+        g.drawRect(x, repY, w, repH, 1);
+    }
 }
 
 } // namespace PianoRoll

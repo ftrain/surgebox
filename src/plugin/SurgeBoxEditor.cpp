@@ -151,11 +151,32 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
 
         processor_.switchInstrument(voice, type);
 
+        // Update drum mode / pitch restriction for the new instrument
+        if (type == SurgeBox::InstrumentType::TR808)
+        {
+            std::vector<int> drumPitches;
+            for (int i = 0; i < SurgeBox::TR808Processor::NUM_DRUM_VOICES; i++)
+            {
+                auto dv = static_cast<SurgeBox::TR808Processor::DrumVoice>(i);
+                drumPitches.push_back(SurgeBox::TR808Processor::midiNoteForVoice(dv));
+            }
+            std::sort(drumPitches.begin(), drumPitches.end());
+            pianoRoll_->setFixedPitches(drumPitches);
+            pianoKeyboard_->setDrumMode(true);
+        }
+        else
+        {
+            pianoRoll_->setFixedPitches({});
+            pianoKeyboard_->setDrumMode(false);
+        }
+
         // Rebuild editor for the new instrument
         if (showingMasterFX_)
             showMasterFXEditor(false);
         else
             rebuildInstrumentEditor();
+
+        resized();
     };
 
     // Create scrollable viewport for instrument editor
@@ -221,6 +242,7 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
             }
             std::sort(drumPitches.begin(), drumPitches.end());
             pianoRoll_->setFixedPitches(drumPitches);
+            pianoKeyboard_->setDrumMode(true);
         }
     }
 
@@ -357,7 +379,9 @@ void SurgeBoxEditor::resized()
     auto* model = engine_.getActivePatternModel();
     int bars = model ? model->getBars() : 1;
     int numNotes = pianoRoll_->getVisibleNoteCount();
-    int noteWidth = 18;
+    int noteWidth = pianoRoll_->isDrumMode() ? 48 : 18;
+    pianoRoll_->setNoteWidth(noteWidth);
+    pianoKeyboard_->setNoteWidth(noteWidth);
     double pixelsPerBeat = pianoRoll_->getPixelsPerBeat();
     int pianoRollContentWidth = numNotes * noteWidth;
     int pianoRollContentHeight = static_cast<int>(bars * 4 * pixelsPerBeat) + 10;
@@ -377,11 +401,13 @@ void SurgeBoxEditor::timerCallback()
 {
     if (engine_.isPlaying())
     {
-        pianoRoll_->repaint();
+        double playhead = engine_.getActiveVoicePlayheadBeats();
+        pianoRoll_->updatePlayhead(playhead);
         pianoKeyboard_->setPlayingNotes(engine_.getActivePlayingNotes());
     }
     else
     {
+        pianoRoll_->hidePlayhead();
         pianoKeyboard_->setPlayingNotes({});
     }
 
@@ -578,10 +604,12 @@ void SurgeBoxEditor::onVoiceChanged(int voice)
         }
         std::sort(drumPitches.begin(), drumPitches.end());
         pianoRoll_->setFixedPitches(drumPitches);
+        pianoKeyboard_->setDrumMode(true);
     }
     else
     {
         pianoRoll_->setFixedPitches({});
+        pianoKeyboard_->setDrumMode(false);
     }
 
     commandBar_->updateMeasuresLabel();

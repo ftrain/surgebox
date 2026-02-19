@@ -9,6 +9,12 @@
 #include "PianoRollWidget.h"
 #include "core/SurgeBoxEngine.h"
 #include "gui/Theme.h"
+#include "pianoroll/GridLayer.h"
+#include "pianoroll/NoteLayer.h"
+#include "pianoroll/PlayheadLayer.h"
+#include "pianoroll/LoopLayer.h"
+#include "pianoroll/GhostNoteLayer.h"
+#include "pianoroll/OverlayLayer.h"
 #include <algorithm>
 
 namespace SurgeBox
@@ -19,6 +25,42 @@ PianoRollWidget::PianoRollWidget()
     setOpaque(true);
     setWantsKeyboardFocus(true);
     rebuildVisiblePitches();
+
+    // Create layers (order = z-order, bottom to top)
+    gridLayer_ = std::make_unique<GridLayer>();
+    addAndMakeVisible(*gridLayer_);
+
+    noteLayer_ = std::make_unique<NoteLayer>();
+    addAndMakeVisible(*noteLayer_);
+
+    loopLayer_ = std::make_unique<LoopLayer>();
+    addAndMakeVisible(*loopLayer_);
+
+    ghostNoteLayer_ = std::make_unique<GhostNoteLayer>();
+    addAndMakeVisible(*ghostNoteLayer_);
+
+    overlayLayer_ = std::make_unique<OverlayLayer>();
+    addAndMakeVisible(*overlayLayer_);
+
+    playheadLayer_ = std::make_unique<PlayheadLayer>();
+    addAndMakeVisible(*playheadLayer_);
+
+    // Selection toolbar (on top of all layers)
+    selectionToolbar_ = std::make_unique<PianoRoll::SelectionToolbar>();
+    addChildComponent(*selectionToolbar_);
+
+    selectionToolbar_->onLoop = [this]() { performLoop(); };
+    selectionToolbar_->onDelete = [this]() {
+        deleteSelected();
+        hideSelectionToolbar();
+    };
+    selectionToolbar_->onInvert = [this]() { performInvert(); };
+    selectionToolbar_->onHalve = [this]() { performHalveDuration(); };
+    selectionToolbar_->onDouble = [this]() { performDoubleDuration(); };
+    selectionToolbar_->onCancel = [this]() {
+        clearSelection();
+        hideSelectionToolbar();
+    };
 }
 
 PianoRollWidget::~PianoRollWidget()
@@ -50,13 +92,35 @@ void PianoRollWidget::setPatternModel(PatternModel* model)
     {
         patternModel_->onPatternChanged = [this]() {
             selection_.validateSelection(patternModel_);
-            repaint();
+            if (patternModel_->hasLoopRegions())
+                rebuildGhostNotes();
+            pushRenderParams();
+            noteLayer_->repaint();
+            loopLayer_->repaint();
+            ghostNoteLayer_->repaint();
         };
     }
 
     selection_.clear();
+    activeLoopIndex_ = -1;
+    hideSelectionToolbar();
     draggingNoteIndex_ = -1;
-    repaint();
+    rebuildGhostNotes();
+
+    // Update all layers with new model
+    gridLayer_->setPatternModel(model);
+    noteLayer_->setPatternModel(model);
+    loopLayer_->setPatternModel(model);
+    ghostNoteLayer_->setPatternModel(model);
+    overlayLayer_->setPatternModel(model);
+    playheadLayer_->setPatternModel(model);
+
+    pushRenderParams();
+    gridLayer_->invalidateCache();
+    noteLayer_->repaint();
+    loopLayer_->repaint();
+    ghostNoteLayer_->repaint();
+    overlayLayer_->repaint();
 }
 
 void PianoRollWidget::rebuildVisiblePitches()
@@ -75,11 +139,42 @@ void PianoRollWidget::setFixedPitches(const std::vector<int>& pitches)
 {
     fixedPitches_ = pitches;
     rebuildVisiblePitches();
-    repaint();
+    pushRenderParams();
+    gridLayer_->invalidateCache();
+    noteLayer_->repaint();
+}
+
+void PianoRollWidget::setGridSize(double beats)
+{
+    gridSize_ = beats;
+    pushRenderParams();
+    gridLayer_->invalidateCache();
+}
+
+void PianoRollWidget::setPixelsPerBeat(double ppb)
+{
+    pixelsPerBeat_ = std::clamp(ppb, 15.0, 120.0);
+    pushRenderParams();
+    gridLayer_->invalidateCache();
+    noteLayer_->repaint();
+    loopLayer_->repaint();
+    ghostNoteLayer_->repaint();
+}
+
+void PianoRollWidget::setNoteWidth(int w)
+{
+    noteWidth_ = w;
+    pushRenderParams();
+    gridLayer_->invalidateCache();
+    noteLayer_->repaint();
 }
 
 void PianoRollWidget::setScale(int root, ScaleType type)
 {
+    // In drum mode, ignore scale changes — pitches are fixed to drum voices
+    if (!fixedPitches_.empty())
+        return;
+
     int newRoot = root % 12;
 
     if (patternModel_)
@@ -122,7 +217,9 @@ void PianoRollWidget::setScale(int root, ScaleType type)
     scaleType_ = type;
     rebuildVisiblePitches();
     selection_.clear();
-    repaint();
+    pushRenderParams();
+    gridLayer_->invalidateCache();
+    noteLayer_->repaint();
 }
 
 bool PianoRollWidget::isNoteInScale(int pitch) const
@@ -133,13 +230,17 @@ bool PianoRollWidget::isNoteInScale(int pitch) const
 void PianoRollWidget::setStepRecordEnabled(bool enabled)
 {
     stepRecordEnabled_ = enabled;
-    repaint();
+    if (enabled)
+        overlayLayer_->setStepCursor(stepPosition_);
+    else
+        overlayLayer_->clearStepCursor();
 }
 
 void PianoRollWidget::resetStepPosition()
 {
     stepPosition_ = 0.0;
-    repaint();
+    if (stepRecordEnabled_)
+        overlayLayer_->setStepCursor(stepPosition_);
 }
 
 void PianoRollWidget::addNoteAtCurrentStep(int pitch, int velocity)
@@ -155,25 +256,53 @@ void PianoRollWidget::addNoteAtCurrentStep(int pitch, int velocity)
     if (stepPosition_ >= patternLength)
         stepPosition_ = 0.0;
 
-    repaint();
+    noteLayer_->repaint();
+    if (stepRecordEnabled_)
+        overlayLayer_->setStepCursor(stepPosition_);
 }
 
 void PianoRollWidget::selectAll()
 {
     selection_.selectAll(patternModel_);
-    repaint();
+    pushRenderParams();
+    noteLayer_->repaint();
 }
 
 void PianoRollWidget::clearSelection()
 {
     selection_.clear();
-    repaint();
+    hideSelectionToolbar();
+    pushRenderParams();
+    noteLayer_->repaint();
 }
 
 void PianoRollWidget::deleteSelected()
 {
     selection_.deleteSelected(patternModel_);
-    repaint();
+    pushRenderParams();
+    noteLayer_->repaint();
+}
+
+void PianoRollWidget::pushRenderParams()
+{
+    auto params = buildRenderParams();
+    gridLayer_->setRenderParams(params);
+    noteLayer_->setRenderParams(params);
+    playheadLayer_->setRenderParams(params);
+    loopLayer_->setRenderParams(params);
+    ghostNoteLayer_->setRenderParams(params);
+    overlayLayer_->setRenderParams(params);
+}
+
+void PianoRollWidget::updatePlayhead(double beats)
+{
+    pushRenderParams();
+    playheadLayer_->updatePlayheadPosition(beats);
+}
+
+void PianoRollWidget::hidePlayhead()
+{
+    playheadLayer_->hidePlayhead();
 }
 
 PianoRoll::RenderParams PianoRollWidget::buildRenderParams() const
@@ -186,7 +315,7 @@ PianoRoll::RenderParams PianoRollWidget::buildRenderParams() const
     params.highestNote = highestNote_;
     params.visiblePitches = &visiblePitches_;
     params.selectedNotes = &selection_.getSelection();
-    params.isChromatic = (scaleType_ == ScaleType::Chromatic);
+    params.isChromatic = fixedPitches_.empty() && (scaleType_ == ScaleType::Chromatic);
     params.scaleRoot = scaleRoot_;
     return params;
 }
@@ -215,7 +344,6 @@ void PianoRollWidget::playNote(int pitch)
     if (onNoteOn)
         onNoteOn(pitch, 100);
     playingNote_ = pitch;
-    repaint();
 }
 
 void PianoRollWidget::stopNote(int pitch)
@@ -224,7 +352,6 @@ void PianoRollWidget::stopNote(int pitch)
         onNoteOff(pitch);
     if (playingNote_ == pitch)
         playingNote_ = -1;
-    repaint();
 }
 
 std::pair<double, int> PianoRollWidget::screenToNote(juce::Point<int> pos)
@@ -239,34 +366,24 @@ juce::Rectangle<int> PianoRollWidget::noteToScreen(int noteIndex)
 
 void PianoRollWidget::paint(juce::Graphics& g)
 {
+    // Layers handle all rendering; parent just fills background behind any gaps
     g.fillAll(Theme::color(Theme::pianoRollBackground));
-
-    if (engine_ && engine_->isPlaying())
-        sequencerPlayingNotes_ = engine_->getActivePlayingNotes();
-    else
-        sequencerPlayingNotes_.clear();
-
-    auto gridArea = getGridArea();
-    auto params = buildRenderParams();
-
-    PianoRoll::drawGrid(g, gridArea, patternModel_, params);
-    PianoRoll::drawNotes(g, gridArea, patternModel_, params);
-
-    if (engine_ && engine_->isPlaying())
-    {
-        double playhead = engine_->getActiveVoicePlayheadBeats();
-        PianoRoll::drawPlayhead(g, gridArea, playhead, pixelsPerBeat_);
-    }
-
-    if (stepRecordEnabled_)
-        PianoRoll::drawStepCursor(g, gridArea, stepPosition_, pixelsPerBeat_);
-
-    if (dragMode_ == DragMode::BoxSelect)
-        PianoRoll::drawBoxSelection(g, boxSelectStart_, boxSelectEnd_);
 }
 
 void PianoRollWidget::resized()
 {
+    auto bounds = getLocalBounds();
+
+    // All layers cover the full widget area
+    gridLayer_->setBounds(bounds);
+    noteLayer_->setBounds(bounds);
+    loopLayer_->setBounds(bounds);
+    ghostNoteLayer_->setBounds(bounds);
+    overlayLayer_->setBounds(bounds);
+    playheadLayer_->setBounds(bounds);
+
+    pushRenderParams();
+    gridLayer_->invalidateCache();
 }
 
 void PianoRollWidget::mouseDown(const juce::MouseEvent& e)
@@ -274,12 +391,52 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent& e)
     if (!patternModel_)
         return;
 
+    // Hide toolbar if clicking outside it
+    if (selectionToolbar_ && selectionToolbar_->isVisible())
+    {
+        auto toolbarBounds = selectionToolbar_->getBounds();
+        if (!toolbarBounds.contains(e.getPosition()))
+            hideSelectionToolbar();
+    }
+
     grabKeyboardFocus();
 
     auto gridArea = getGridArea();
 
     auto [beat, pitch] = screenToNote(e.getPosition());
     double quantizedBeat = std::floor(beat / gridSize_) * gridSize_;
+
+    // Prevent editing in the looped (ghost) region
+    if (isInLoopedRegion(quantizedBeat, pitch))
+        return;
+
+    // Loop region interaction: select/resize by clicking on loop border edges
+    if (!e.mods.isShiftDown() && patternModel_->hasLoopRegions())
+    {
+        // Check if clicking on the edge of any loop (selected or not)
+        for (int i = 0; i < patternModel_->getNumLoopRegions(); ++i)
+        {
+            auto edge = findLoopEdge(i, e.getPosition());
+            if (edge != LoopEdge::None)
+            {
+                if (i != activeLoopIndex_)
+                    selectLoop(i, e.getPosition());
+                resizingEdge_ = edge;
+                dragMode_ = DragMode::LoopResize;
+                dragStartBeat_ = beat;
+                dragStartPitch_ = pitch;
+                return;
+            }
+        }
+
+        // Click outside all loops deselects
+        if (activeLoopIndex_ >= 0)
+        {
+            int loopIdx = patternModel_->findLoopRegionAt(beat, pitch);
+            if (loopIdx < 0)
+                deselectLoop();
+        }
+    }
 
     int clickedIndex = patternModel_->findNoteContaining(quantizedBeat, pitch, 0.05);
 
@@ -296,7 +453,8 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent& e)
         dragMode_ = DragMode::Erasing;
         lastDrawnBeat_ = quantizedBeat;
         lastDrawnPitch_ = pitch;
-        repaint();
+        pushRenderParams();
+        noteLayer_->repaint();
         return;
     }
 
@@ -340,6 +498,8 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent& e)
     {
         if (e.mods.isShiftDown())
         {
+            if (activeLoopIndex_ >= 0)
+                deselectLoop();
             dragMode_ = DragMode::BoxSelect;
             boxSelectStart_ = e.getPosition();
             boxSelectEnd_ = e.getPosition();
@@ -364,7 +524,8 @@ void PianoRollWidget::mouseDown(const juce::MouseEvent& e)
             draggingNoteIndex_ = -1;
         }
     }
-    repaint();
+    pushRenderParams();
+    noteLayer_->repaint();
 }
 
 void PianoRollWidget::mouseDrag(const juce::MouseEvent& e)
@@ -377,10 +538,50 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent& e)
 
     auto gridArea = getGridArea();
 
+    if (dragMode_ == DragMode::LoopResize)
+    {
+        if (activeLoopIndex_ < 0 || activeLoopIndex_ >= patternModel_->getNumLoopRegions())
+            return;
+
+        auto [beat, pitch] = screenToNote(e.getPosition());
+        double quantizedBeat = std::floor(beat / gridSize_) * gridSize_;
+        const auto& lr = patternModel_->getLoopRegions()[activeLoopIndex_];
+
+        double newStart = lr.startBeat;
+        double newEnd = lr.endBeat;
+        int newMinPitch = lr.minPitch;
+        int newMaxPitch = lr.maxPitch;
+
+        switch (resizingEdge_)
+        {
+            case LoopEdge::Top:
+                newStart = std::min(quantizedBeat, newEnd - gridSize_);
+                break;
+            case LoopEdge::Bottom:
+                newEnd = std::max(quantizedBeat + gridSize_, newStart + gridSize_);
+                break;
+            case LoopEdge::Left:
+                newMinPitch = std::min(pitch, newMaxPitch);
+                break;
+            case LoopEdge::Right:
+                newMaxPitch = std::max(pitch, newMinPitch);
+                break;
+            default:
+                break;
+        }
+
+        patternModel_->resizeLoopRegion(static_cast<size_t>(activeLoopIndex_),
+                                         newStart, newEnd, newMinPitch, newMaxPitch);
+        rebuildGhostNotes();
+        loopLayer_->repaint();
+        ghostNoteLayer_->repaint();
+        return;
+    }
+
     if (dragMode_ == DragMode::BoxSelect)
     {
         boxSelectEnd_ = e.getPosition();
-        repaint();
+        overlayLayer_->setBoxSelection(boxSelectStart_, boxSelectEnd_);
         return;
     }
 
@@ -391,14 +592,16 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent& e)
     {
         if (quantizedBeat != lastDrawnBeat_ || pitch != lastDrawnPitch_)
         {
-            if (quantizedBeat >= 0 && quantizedBeat < patternModel_->lengthInBeats())
+            if (quantizedBeat >= 0 && quantizedBeat < patternModel_->lengthInBeats()
+                && !isInLoopedRegion(quantizedBeat, pitch))
             {
                 editor_.removeOverlappingNotes(patternModel_, pitch, quantizedBeat, quantizedBeat + gridSize_);
                 editor_.addNote(patternModel_, quantizedBeat, gridSize_, pitch, 100);
 
                 lastDrawnBeat_ = quantizedBeat;
                 lastDrawnPitch_ = pitch;
-                repaint();
+                pushRenderParams();
+                noteLayer_->repaint();
             }
         }
         return;
@@ -408,12 +611,19 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent& e)
     {
         if (quantizedBeat != lastDrawnBeat_ || pitch != lastDrawnPitch_)
         {
+            if (isInLoopedRegion(quantizedBeat, pitch))
+            {
+                lastDrawnBeat_ = quantizedBeat;
+                lastDrawnPitch_ = pitch;
+                return;
+            }
             int noteIndex = patternModel_->findNoteContaining(quantizedBeat, pitch, 0.05);
             if (noteIndex >= 0)
             {
                 patternModel_->removeNote(noteIndex);
                 selection_.remove(noteIndex);
-                repaint();
+                pushRenderParams();
+                noteLayer_->repaint();
             }
 
             lastDrawnBeat_ = quantizedBeat;
@@ -457,7 +667,8 @@ void PianoRollWidget::mouseDrag(const juce::MouseEvent& e)
         }
     }
 
-    repaint();
+    pushRenderParams();
+    noteLayer_->repaint();
 }
 
 void PianoRollWidget::mouseUp(const juce::MouseEvent& e)
@@ -476,6 +687,26 @@ void PianoRollWidget::mouseUp(const juce::MouseEvent& e)
             selection_.clear();
 
         selection_.selectInRect(selRect, gridArea, patternModel_, buildRenderParams());
+
+        overlayLayer_->clearBoxSelection();
+
+        if (!selection_.empty())
+        {
+            // Store the beat + pitch range of the box selection for loop region
+            auto [beatStart, pitchStart] = screenToNote(boxSelectStart_);
+            auto [beatEnd, pitchEnd] = screenToNote(boxSelectEnd_);
+            boxSelectBeatStart_ = std::floor(std::min(beatStart, beatEnd) / gridSize_) * gridSize_;
+            boxSelectBeatEnd_ = std::ceil(std::max(beatStart, beatEnd) / gridSize_) * gridSize_;
+            boxSelectMinPitch_ = std::min(pitchStart, pitchEnd);
+            boxSelectMaxPitch_ = std::max(pitchStart, pitchEnd);
+
+            showSelectionToolbar(e.getPosition());
+        }
+    }
+    else if (dragMode_ == DragMode::LoopResize)
+    {
+        resizingEdge_ = LoopEdge::None;
+        rebuildGhostNotes();
     }
     else if (dragMode_ == DragMode::Move)
     {
@@ -489,7 +720,8 @@ void PianoRollWidget::mouseUp(const juce::MouseEvent& e)
 
     draggingNoteIndex_ = -1;
     dragMode_ = DragMode::None;
-    repaint();
+    pushRenderParams();
+    noteLayer_->repaint();
 }
 
 void PianoRollWidget::mouseMove(const juce::MouseEvent& e)
@@ -501,6 +733,25 @@ void PianoRollWidget::mouseMove(const juce::MouseEvent& e)
     }
 
     auto gridArea = getGridArea();
+
+    // Show resize cursor when hovering over any loop edge
+    if (patternModel_->hasLoopRegions())
+    {
+        for (int i = 0; i < patternModel_->getNumLoopRegions(); ++i)
+        {
+            auto edge = findLoopEdge(i, e.getPosition());
+            if (edge == LoopEdge::Top || edge == LoopEdge::Bottom)
+            {
+                setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+                return;
+            }
+            if (edge == LoopEdge::Left || edge == LoopEdge::Right)
+            {
+                setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+                return;
+            }
+        }
+    }
 
     auto [beat, pitch] = screenToNote(e.getPosition());
     double quantizedBeat = std::floor(beat / gridSize_) * gridSize_;
@@ -538,6 +789,12 @@ void PianoRollWidget::mouseWheelMove(const juce::MouseEvent& e,
 
         if (pixelsPerBeat_ != oldPixelsPerBeat)
         {
+            pushRenderParams();
+            gridLayer_->invalidateCache();
+            noteLayer_->repaint();
+            loopLayer_->repaint();
+            ghostNoteLayer_->repaint();
+
             if (auto* parent = getParentComponent())
                 parent->resized();
         }
@@ -564,7 +821,8 @@ bool PianoRollWidget::keyPressed(const juce::KeyPress& key)
     if (key.isKeyCode('X') && key.getModifiers().isCommandDown())
     {
         selection_.cut(patternModel_);
-        repaint();
+        pushRenderParams();
+        noteLayer_->repaint();
         return true;
     }
 
@@ -572,24 +830,443 @@ bool PianoRollWidget::keyPressed(const juce::KeyPress& key)
     {
         double pastePosition = stepRecordEnabled_ ? stepPosition_ : 0.0;
         selection_.paste(patternModel_, pastePosition);
-        repaint();
+        pushRenderParams();
+        noteLayer_->repaint();
         return true;
     }
 
     if (key.isKeyCode(juce::KeyPress::deleteKey) ||
         key.isKeyCode(juce::KeyPress::backspaceKey))
     {
+        // Delete active loop if one is selected, otherwise delete selected notes
+        if (activeLoopIndex_ >= 0)
+        {
+            deleteActiveLoop();
+            return true;
+        }
         deleteSelected();
         return true;
     }
 
     if (key.isKeyCode(juce::KeyPress::escapeKey))
     {
-        clearSelection();
-        return true;
+        // Priority chain: toolbar → active loop → selection → all loops
+        if (selectionToolbar_ && selectionToolbar_->isVisible())
+        {
+            hideSelectionToolbar();
+            clearSelection();
+            return true;
+        }
+        if (activeLoopIndex_ >= 0)
+        {
+            deselectLoop();
+            return true;
+        }
+        if (!selection_.empty())
+        {
+            clearSelection();
+            return true;
+        }
+        if (patternModel_ && patternModel_->hasLoopRegions())
+        {
+            patternModel_->clearLoopRegions();
+            ghostNotes_.clear();
+            ghostNoteLayer_->repaint();
+            loopLayer_->repaint();
+            return true;
+        }
+        return false;
     }
 
     return false;
+}
+
+// --- Selection toolbar ---
+
+void PianoRollWidget::showSelectionToolbar(juce::Point<int> position)
+{
+    if (selectionToolbar_)
+    {
+        // Pre-compute ghost preview from the box selection beat range
+        rebuildGhostNotes();
+        selectionToolbar_->showAt(position);
+    }
+}
+
+void PianoRollWidget::hideSelectionToolbar()
+{
+    // If a loop was selected, deselect it (restores toolbar callbacks)
+    if (activeLoopIndex_ >= 0)
+        deselectLoop();
+    else if (selectionToolbar_)
+        selectionToolbar_->dismiss();
+
+    // Only clear ghosts if there's no active loop region
+    if (!patternModel_ || !patternModel_->hasLoopRegions())
+    {
+        ghostNotes_.clear();
+        ghostNoteLayer_->repaint();
+    }
+}
+
+void PianoRollWidget::rebuildGhostNotes()
+{
+    ghostNotes_.clear();
+
+    if (!patternModel_)
+    {
+        ghostNoteLayer_->setGhostNotes(&ghostNotes_);
+        ghostNoteLayer_->repaint();
+        return;
+    }
+
+    // If there are active loop regions, build ghosts from source notes in each region
+    if (patternModel_->hasLoopRegions())
+    {
+        double patLen = patternModel_->lengthInBeats();
+
+        for (const auto& lr : patternModel_->getLoopRegions())
+        {
+            double loopLen = lr.length();
+            if (loopLen <= 0.0)
+                continue;
+
+            for (int i = 0; i < patternModel_->getNumNotes(); ++i)
+            {
+                double beat, dur;
+                int pitch, vel;
+                if (!patternModel_->getNoteAt(i, beat, dur, pitch, vel))
+                    continue;
+
+                if (beat < lr.startBeat || beat >= lr.endBeat)
+                    continue;
+                if (!lr.containsPitch(pitch))
+                    continue;
+
+                for (double offset = loopLen; lr.startBeat + offset < patLen; offset += loopLen)
+                {
+                    double ghostBeat = beat + offset;
+                    if (ghostBeat >= patLen)
+                        break;
+                    double ghostDur = std::min(dur, patLen - ghostBeat);
+                    ghostNotes_.push_back({ghostBeat, ghostDur, pitch});
+                }
+            }
+        }
+
+        ghostNoteLayer_->setGhostNotes(&ghostNotes_);
+        ghostNoteLayer_->repaint();
+        return;
+    }
+
+    // Otherwise, preview from the current box selection (before Loop is clicked)
+    if (selection_.empty())
+    {
+        ghostNoteLayer_->setGhostNotes(&ghostNotes_);
+        ghostNoteLayer_->repaint();
+        return;
+    }
+
+    double loopStart = boxSelectBeatStart_;
+    double loopEnd = boxSelectBeatEnd_;
+    double loopLength = loopEnd - loopStart;
+    if (loopLength <= 0.0)
+    {
+        ghostNoteLayer_->setGhostNotes(&ghostNotes_);
+        ghostNoteLayer_->repaint();
+        return;
+    }
+
+    double patternLength = patternModel_->lengthInBeats();
+
+    for (int idx : selection_.getSelection())
+    {
+        double beat, dur;
+        int pitch, vel;
+        if (!patternModel_->getNoteAt(idx, beat, dur, pitch, vel))
+            continue;
+
+        for (double offset = loopLength; loopStart + offset < patternLength; offset += loopLength)
+        {
+            double ghostBeat = beat + offset;
+            if (ghostBeat >= patternLength)
+                break;
+            double ghostDuration = std::min(dur, patternLength - ghostBeat);
+            ghostNotes_.push_back({ghostBeat, ghostDuration, pitch});
+        }
+    }
+
+    ghostNoteLayer_->setGhostNotes(&ghostNotes_);
+    ghostNoteLayer_->repaint();
+}
+
+bool PianoRollWidget::isInLoopedRegion(double beat, int pitch) const
+{
+    if (!patternModel_ || !patternModel_->hasLoopRegions())
+        return false;
+
+    double patLen = patternModel_->lengthInBeats();
+
+    for (const auto& lr : patternModel_->getLoopRegions())
+    {
+        if (!lr.containsPitch(pitch) || beat < lr.endBeat)
+            continue;
+
+        // Check if beat falls within any repetition tile of this loop
+        double loopLen = lr.length();
+        if (loopLen <= 0.0)
+            continue;
+
+        for (double offset = loopLen; lr.startBeat + offset < patLen; offset += loopLen)
+        {
+            double repStart = lr.startBeat + offset;
+            double repEnd = std::min(repStart + loopLen, patLen);
+            if (beat >= repStart && beat < repEnd)
+                return true;
+        }
+    }
+    return false;
+}
+
+// --- Loop interaction ---
+
+juce::Rectangle<int> PianoRollWidget::loopRegionToScreen(int loopIndex) const
+{
+    if (!patternModel_ || loopIndex < 0 || loopIndex >= patternModel_->getNumLoopRegions())
+        return {};
+
+    const auto& lr = patternModel_->getLoopRegions()[loopIndex];
+    auto gridArea = getGridArea();
+    auto params = buildRenderParams();
+
+    // Find column bounds from visible pitches
+    int minCol = -1, maxCol = -1;
+    if (params.visiblePitches)
+    {
+        for (int i = 0; i < static_cast<int>(params.visiblePitches->size()); ++i)
+        {
+            int p = (*params.visiblePitches)[i];
+            if (p >= lr.minPitch && p <= lr.maxPitch)
+            {
+                if (minCol < 0) minCol = i;
+                maxCol = i;
+            }
+        }
+    }
+    if (minCol < 0 || maxCol < 0)
+        return {};
+
+    int x = gridArea.getX() + minCol * params.noteWidth;
+    int w = (maxCol - minCol + 1) * params.noteWidth;
+    int y = gridArea.getY() + static_cast<int>(lr.startBeat * params.pixelsPerBeat);
+    int h = static_cast<int>(lr.length() * params.pixelsPerBeat);
+
+    return {x, y, w, h};
+}
+
+PianoRollWidget::LoopEdge PianoRollWidget::findLoopEdge(int loopIndex, juce::Point<int> pos,
+                                                         int tolerance) const
+{
+    auto rect = loopRegionToScreen(loopIndex);
+    if (rect.isEmpty())
+        return LoopEdge::None;
+
+    // Detect clicks in an inside zone along each edge
+    bool inHorizRange = pos.x >= rect.getX() && pos.x <= rect.getRight();
+    bool inVertRange = pos.y >= rect.getY() && pos.y <= rect.getBottom();
+
+    bool nearTop = pos.y >= rect.getY() && pos.y <= rect.getY() + tolerance;
+    bool nearBottom = pos.y >= rect.getBottom() - tolerance && pos.y <= rect.getBottom();
+    bool nearLeft = pos.x >= rect.getX() && pos.x <= rect.getX() + tolerance;
+    bool nearRight = pos.x >= rect.getRight() - tolerance && pos.x <= rect.getRight();
+
+    if (nearTop && inHorizRange) return LoopEdge::Top;
+    if (nearBottom && inHorizRange) return LoopEdge::Bottom;
+    if (nearLeft && inVertRange) return LoopEdge::Left;
+    if (nearRight && inVertRange) return LoopEdge::Right;
+
+    return LoopEdge::None;
+}
+
+void PianoRollWidget::selectLoop(int index, juce::Point<int> position)
+{
+    // Clear selection and dismiss toolbar directly (don't use hideSelectionToolbar
+    // which would call deselectLoop and reset activeLoopIndex_)
+    selection_.clear();
+    if (selectionToolbar_)
+        selectionToolbar_->dismiss();
+    ghostNotes_.clear();
+
+    activeLoopIndex_ = index;
+    loopLayer_->setActiveLoopIndex(index);
+
+    // Show toolbar with Delete/Cancel for the loop
+    if (selectionToolbar_)
+    {
+        selectionToolbar_->onLoop = nullptr;
+        selectionToolbar_->onDelete = [this]() { deleteActiveLoop(); };
+        selectionToolbar_->onInvert = nullptr;
+        selectionToolbar_->onHalve = nullptr;
+        selectionToolbar_->onDouble = nullptr;
+        selectionToolbar_->onCancel = [this]() { deselectLoop(); };
+        selectionToolbar_->showAt(position);
+    }
+
+    pushRenderParams();
+    noteLayer_->repaint();
+    loopLayer_->repaint();
+    ghostNoteLayer_->repaint();
+}
+
+void PianoRollWidget::deselectLoop()
+{
+    activeLoopIndex_ = -1;
+    resizingEdge_ = LoopEdge::None;
+    loopLayer_->setActiveLoopIndex(-1);
+
+    if (selectionToolbar_)
+        selectionToolbar_->dismiss();
+
+    // Restore normal toolbar callbacks
+    if (selectionToolbar_)
+    {
+        selectionToolbar_->onLoop = [this]() { performLoop(); };
+        selectionToolbar_->onDelete = [this]() {
+            deleteSelected();
+            hideSelectionToolbar();
+        };
+        selectionToolbar_->onInvert = [this]() { performInvert(); };
+        selectionToolbar_->onHalve = [this]() { performHalveDuration(); };
+        selectionToolbar_->onDouble = [this]() { performDoubleDuration(); };
+        selectionToolbar_->onCancel = [this]() {
+            clearSelection();
+            hideSelectionToolbar();
+        };
+    }
+
+    loopLayer_->repaint();
+}
+
+void PianoRollWidget::deleteActiveLoop()
+{
+    if (!patternModel_ || activeLoopIndex_ < 0)
+        return;
+
+    int idx = activeLoopIndex_;
+    deselectLoop();
+    patternModel_->removeLoopRegion(static_cast<size_t>(idx));
+    rebuildGhostNotes();
+    loopLayer_->repaint();
+}
+
+// --- Toolbar operations ---
+
+void PianoRollWidget::performLoop()
+{
+    if (!patternModel_)
+        return;
+
+    // Use the box selection beat range as the loop region
+    double loopStart = boxSelectBeatStart_;
+    double loopEnd = boxSelectBeatEnd_;
+
+    if (loopEnd - loopStart <= 0.0)
+        return;
+
+    // Set the non-destructive loop region on the pattern model
+    patternModel_->addLoopRegion(loopStart, loopEnd, boxSelectMinPitch_, boxSelectMaxPitch_);
+
+    selectionToolbar_->dismiss();
+    selection_.clear();
+    rebuildGhostNotes();
+    pushRenderParams();
+    noteLayer_->repaint();
+    loopLayer_->repaint();
+}
+
+void PianoRollWidget::performInvert()
+{
+    if (!patternModel_ || selection_.empty())
+        return;
+
+    // Find min and max pitch
+    int minPitch = 127, maxPitch = 0;
+    for (int idx : selection_.getSelection())
+    {
+        double beat, dur;
+        int pitch, vel;
+        if (!patternModel_->getNoteAt(idx, beat, dur, pitch, vel))
+            continue;
+        minPitch = std::min(minPitch, pitch);
+        maxPitch = std::max(maxPitch, pitch);
+    }
+
+    int centerPitch = minPitch + maxPitch;
+
+    patternModel_->beginTransaction("Invert");
+
+    for (int idx : selection_.getSelection())
+    {
+        double beat, dur;
+        int pitch, vel;
+        if (!patternModel_->getNoteAt(idx, beat, dur, pitch, vel))
+            continue;
+
+        int newPitch = centerPitch - pitch;
+        patternModel_->moveNote(idx, beat, newPitch);
+    }
+
+    rebuildGhostNotes();
+    pushRenderParams();
+    noteLayer_->repaint();
+}
+
+void PianoRollWidget::performHalveDuration()
+{
+    if (!patternModel_ || selection_.empty())
+        return;
+
+    patternModel_->beginTransaction("Halve Duration");
+
+    for (int idx : selection_.getSelection())
+    {
+        double beat, dur;
+        int pitch, vel;
+        if (!patternModel_->getNoteAt(idx, beat, dur, pitch, vel))
+            continue;
+
+        double newDuration = std::max(gridSize_, dur * 0.5);
+        patternModel_->resizeNote(idx, newDuration);
+    }
+
+    rebuildGhostNotes();
+    pushRenderParams();
+    noteLayer_->repaint();
+}
+
+void PianoRollWidget::performDoubleDuration()
+{
+    if (!patternModel_ || selection_.empty())
+        return;
+
+    double patternLength = patternModel_->lengthInBeats();
+
+    patternModel_->beginTransaction("Double Duration");
+
+    for (int idx : selection_.getSelection())
+    {
+        double beat, dur;
+        int pitch, vel;
+        if (!patternModel_->getNoteAt(idx, beat, dur, pitch, vel))
+            continue;
+
+        double newDuration = std::min(dur * 2.0, patternLength - beat);
+        patternModel_->resizeNote(idx, newDuration);
+    }
+
+    rebuildGhostNotes();
+    pushRenderParams();
+    noteLayer_->repaint();
 }
 
 } // namespace SurgeBox

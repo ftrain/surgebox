@@ -14,12 +14,20 @@
 #include "pianoroll/NoteSelection.h"
 #include "pianoroll/NoteEditor.h"
 #include "pianoroll/PianoRollRenderer.h"
+#include "pianoroll/SelectionToolbar.h"
 #include <functional>
+#include <memory>
 
 namespace SurgeBox
 {
 
 class SurgeBoxEngine;
+class GridLayer;
+class NoteLayer;
+class PlayheadLayer;
+class LoopLayer;
+class GhostNoteLayer;
+class OverlayLayer;
 
 class PianoRollWidget : public juce::Component
 {
@@ -29,10 +37,10 @@ class PianoRollWidget : public juce::Component
 
     void setEngine(SurgeBoxEngine* engine);
     void setPatternModel(PatternModel* model);
-    void setGridSize(double beats) { gridSize_ = beats; repaint(); }
+    void setGridSize(double beats);
     double getGridSize() const { return gridSize_; }
     double getPixelsPerBeat() const { return pixelsPerBeat_; }
-    void setPixelsPerBeat(double ppb) { pixelsPerBeat_ = std::clamp(ppb, 15.0, 120.0); repaint(); }
+    void setPixelsPerBeat(double ppb);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -72,8 +80,45 @@ class PianoRollWidget : public juce::Component
 
     // Restrict pitches to a fixed set (for drum machines). Pass empty to clear.
     void setFixedPitches(const std::vector<int>& pitches);
+    bool isDrumMode() const { return !fixedPitches_.empty(); }
+
+    int getNoteWidth() const { return noteWidth_; }
+    void setNoteWidth(int w);
+
+    using GhostNote = PianoRoll::GhostNote;
+    const std::vector<GhostNote>& getGhostNotes() const { return ghostNotes_; }
+
+    // Playhead control (called from timer instead of full repaint)
+    void updatePlayhead(double beats);
+    void hidePlayhead();
 
   private:
+    // Layers
+    std::unique_ptr<GridLayer> gridLayer_;
+    std::unique_ptr<NoteLayer> noteLayer_;
+    std::unique_ptr<PlayheadLayer> playheadLayer_;
+    std::unique_ptr<LoopLayer> loopLayer_;
+    std::unique_ptr<GhostNoteLayer> ghostNoteLayer_;
+    std::unique_ptr<OverlayLayer> overlayLayer_;
+
+    // Push current render params to all layers
+    void pushRenderParams();
+
+    // Selection toolbar
+    std::unique_ptr<PianoRoll::SelectionToolbar> selectionToolbar_;
+    void showSelectionToolbar(juce::Point<int> position);
+    void hideSelectionToolbar();
+    void rebuildGhostNotes();
+
+    // Toolbar operations
+    void performLoop();
+    void performInvert();
+    void performHalveDuration();
+    void performDoubleDuration();
+
+    // Ghost notes for loop preview
+    std::vector<GhostNote> ghostNotes_;
+
     // Grid settings
     int lowestNote_{21};
     int highestNote_{108};
@@ -114,7 +159,8 @@ class PianoRollWidget : public juce::Component
         BoxSelect,
         PlayingPiano,
         Drawing,
-        Erasing
+        Erasing,
+        LoopResize
     } dragMode_{DragMode::None};
 
     double lastDrawnBeat_{-1.0};
@@ -122,13 +168,26 @@ class PianoRollWidget : public juce::Component
     int playingNote_{-1};
     juce::Point<int> boxSelectStart_;
     juce::Point<int> boxSelectEnd_;
+    double boxSelectBeatStart_{0.0};
+    double boxSelectBeatEnd_{0.0};
+    int boxSelectMinPitch_{0};
+    int boxSelectMaxPitch_{127};
+
+    // Check if a beat/pitch falls in the looped (ghost) region
+    bool isInLoopedRegion(double beat, int pitch) const;
+
+    // Loop interaction
+    int activeLoopIndex_{-1};
+    enum class LoopEdge { None, Top, Bottom, Left, Right } resizingEdge_{LoopEdge::None};
+    void selectLoop(int index, juce::Point<int> position);
+    void deselectLoop();
+    void deleteActiveLoop();
+    LoopEdge findLoopEdge(int loopIndex, juce::Point<int> pos, int tolerance = 6) const;
+    juce::Rectangle<int> loopRegionToScreen(int loopIndex) const;
 
     // References
     SurgeBoxEngine* engine_{nullptr};
     PatternModel* patternModel_{nullptr};
-
-    // Sequencer playback highlighting
-    std::vector<uint8_t> sequencerPlayingNotes_;
 
     // Helper to build render params
     PianoRoll::RenderParams buildRenderParams() const;

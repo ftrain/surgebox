@@ -276,6 +276,21 @@ target_sources(surgebox PRIVATE
     src/gui/widgets/pianoroll/NoteSelection.h
     src/gui/widgets/pianoroll/NoteEditor.cpp
     src/gui/widgets/pianoroll/NoteEditor.h
+    src/gui/widgets/pianoroll/SelectionToolbar.cpp
+    src/gui/widgets/pianoroll/SelectionToolbar.h
+    src/gui/widgets/pianoroll/PianoRollLayer.h
+    src/gui/widgets/pianoroll/GridLayer.cpp
+    src/gui/widgets/pianoroll/GridLayer.h
+    src/gui/widgets/pianoroll/NoteLayer.cpp
+    src/gui/widgets/pianoroll/NoteLayer.h
+    src/gui/widgets/pianoroll/PlayheadLayer.cpp
+    src/gui/widgets/pianoroll/PlayheadLayer.h
+    src/gui/widgets/pianoroll/LoopLayer.cpp
+    src/gui/widgets/pianoroll/LoopLayer.h
+    src/gui/widgets/pianoroll/GhostNoteLayer.cpp
+    src/gui/widgets/pianoroll/GhostNoteLayer.h
+    src/gui/widgets/pianoroll/OverlayLayer.cpp
+    src/gui/widgets/pianoroll/OverlayLayer.h
 )
 
 target_include_directories(surgebox PRIVATE

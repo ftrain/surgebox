@@ -7,6 +7,7 @@
  */
 
 #include "PianoKeyboardWidget.h"
+#include "core/TR808Processor.h"
 #include <algorithm>
 
 namespace SurgeBox
@@ -30,6 +31,12 @@ void PianoKeyboardWidget::setScale(int root, ScaleType type)
 void PianoKeyboardWidget::setVisiblePitches(const std::vector<int>& pitches)
 {
     visiblePitches_ = pitches;
+    repaint();
+}
+
+void PianoKeyboardWidget::setDrumMode(bool enabled)
+{
+    drumMode_ = enabled;
     repaint();
 }
 
@@ -98,8 +105,18 @@ void PianoKeyboardWidget::paint(juce::Graphics &g)
 
         g.fillRect(x, bounds.getY(), noteWidth_ - 1, bounds.getHeight());
 
-        // Draw note name for C notes
-        if (noteInOctave == 0)
+        if (drumMode_)
+        {
+            const char* name = TR808Processor::nameForMidiNote(pitch);
+            if (name[0] != '\0')
+            {
+                g.setColour(juce::Colours::black);
+                g.setFont(10.0f);
+                g.drawText(juce::String(name), x + 1, bounds.getY(),
+                           noteWidth_ - 2, bounds.getHeight(), juce::Justification::centred);
+            }
+        }
+        else if (noteInOctave == 0)
         {
             int octave = (pitch / 12) - 1;
             g.setColour(juce::Colours::black);

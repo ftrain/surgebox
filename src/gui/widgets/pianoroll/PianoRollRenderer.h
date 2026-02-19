@@ -22,6 +22,13 @@ class PatternModel;
 namespace PianoRoll
 {
 
+struct GhostNote
+{
+    double beat;
+    double duration;
+    int pitch;
+};
+
 struct RenderParams
 {
     int noteWidth{18};
@@ -51,9 +58,21 @@ void drawPlayhead(juce::Graphics& g, const juce::Rectangle<int>& area,
 void drawStepCursor(juce::Graphics& g, const juce::Rectangle<int>& area,
                     double stepPosition, double pixelsPerBeat);
 
-// Draw box selection rectangle
+// Draw box selection rectangle with highlighted grid cells
 void drawBoxSelection(juce::Graphics& g, const juce::Point<int>& start,
-                      const juce::Point<int>& end);
+                      const juce::Point<int>& end, const juce::Rectangle<int>& area,
+                      const RenderParams& params);
+
+// Draw ghost notes (translucent loop preview)
+void drawGhostNotes(juce::Graphics& g, const juce::Rectangle<int>& area,
+                    const std::vector<GhostNote>& ghosts, const RenderParams& params);
+
+// Draw loop region outline (source box + repetition boxes)
+void drawLoopRegion(juce::Graphics& g, const juce::Rectangle<int>& area,
+                    double loopStartBeat, double loopEndBeat,
+                    int minPitch, int maxPitch,
+                    double patternLengthBeats, const RenderParams& params,
+                    bool selected = false);
 
 // Coordinate conversion helpers
 std::pair<double, int> screenToNote(juce::Point<int> pos, const juce::Rectangle<int>& area,

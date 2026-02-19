@@ -228,6 +228,7 @@ void PatternModel::loadFromPattern(const Pattern &pattern)
 
     tree_.setProperty(IDs::bars, pattern.bars, nullptr);
     tree_.setProperty(IDs::swing, pattern.swing, nullptr);
+    loopRegions_ = pattern.loopRegions;
 
     for (const auto &note : pattern.notes)
     {
@@ -241,6 +242,7 @@ void PatternModel::saveToPattern(Pattern &pattern) const
 {
     pattern.bars = getBars();
     pattern.swing = getSwing();
+    pattern.loopRegions = loopRegions_;
     pattern.notes.clear();
 
     for (int i = 0; i < tree_.getNumChildren(); ++i)
@@ -255,6 +257,241 @@ void PatternModel::saveToPattern(Pattern &pattern) const
         pattern.notes.push_back(midiNote);
     }
     pattern.sortNotes();
+    pattern.rebuildLoopNotes();
+}
+
+// --- Undoable actions for loop regions ---
+
+namespace
+{
+
+class AddLoopAction : public juce::UndoableAction
+{
+  public:
+    AddLoopAction(PatternModel &model, LoopRegion region)
+        : model_(model), region_(region) {}
+
+    bool perform() override
+    {
+        model_.getLoopRegionsMutable().push_back(region_);
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+    bool undo() override
+    {
+        auto &regions = model_.getLoopRegionsMutable();
+        if (!regions.empty())
+            regions.pop_back();
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+  private:
+    PatternModel &model_;
+    LoopRegion region_;
+};
+
+class RemoveLoopAction : public juce::UndoableAction
+{
+  public:
+    RemoveLoopAction(PatternModel &model, size_t index)
+        : model_(model), index_(index)
+    {
+        removed_ = model.getLoopRegions()[index];
+    }
+
+    bool perform() override
+    {
+        auto &regions = model_.getLoopRegionsMutable();
+        if (index_ < regions.size())
+            regions.erase(regions.begin() + static_cast<ptrdiff_t>(index_));
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+    bool undo() override
+    {
+        auto &regions = model_.getLoopRegionsMutable();
+        auto pos = std::min(index_, regions.size());
+        regions.insert(regions.begin() + static_cast<ptrdiff_t>(pos), removed_);
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+  private:
+    PatternModel &model_;
+    size_t index_;
+    LoopRegion removed_;
+};
+
+class ResizeLoopAction : public juce::UndoableAction
+{
+  public:
+    ResizeLoopAction(PatternModel &model, size_t index, LoopRegion newRegion)
+        : model_(model), index_(index), new_(newRegion)
+    {
+        old_ = model.getLoopRegions()[index];
+    }
+
+    bool perform() override
+    {
+        auto &regions = model_.getLoopRegionsMutable();
+        if (index_ < regions.size())
+            regions[index_] = new_;
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+    bool undo() override
+    {
+        auto &regions = model_.getLoopRegionsMutable();
+        if (index_ < regions.size())
+            regions[index_] = old_;
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+  private:
+    PatternModel &model_;
+    size_t index_;
+    LoopRegion old_, new_;
+};
+
+class ClearLoopsAction : public juce::UndoableAction
+{
+  public:
+    ClearLoopsAction(PatternModel &model)
+        : model_(model), saved_(model.getLoopRegions()) {}
+
+    bool perform() override
+    {
+        model_.getLoopRegionsMutable().clear();
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+    bool undo() override
+    {
+        model_.getLoopRegionsMutable() = saved_;
+        model_.notifyLoopChanged();
+        return true;
+    }
+
+  private:
+    PatternModel &model_;
+    std::vector<LoopRegion> saved_;
+};
+
+} // anonymous namespace
+
+void PatternModel::notifyLoopChanged()
+{
+    if (autoSyncPattern_)
+        saveToPattern(*autoSyncPattern_);
+    if (onPatternChanged)
+        onPatternChanged();
+}
+
+void PatternModel::addLoopRegion(double startBeat, double endBeat, int minPitch, int maxPitch)
+{
+    // Validate
+    if (endBeat <= startBeat || minPitch > maxPitch)
+        return;
+
+    LoopRegion lr;
+    lr.startBeat = std::max(0.0, startBeat);
+    lr.endBeat = std::min(endBeat, lengthInBeats());
+    lr.minPitch = std::clamp(minPitch, 0, 127);
+    lr.maxPitch = std::clamp(maxPitch, 0, 127);
+    lr.active = true;
+
+    if (lr.length() <= 0.0)
+        return;
+
+    if (undoManager_)
+    {
+        undoManager_->perform(new AddLoopAction(*this, lr));
+    }
+    else
+    {
+        loopRegions_.push_back(lr);
+        notifyLoopChanged();
+    }
+}
+
+void PatternModel::removeLoopRegion(size_t index)
+{
+    if (index >= loopRegions_.size())
+        return;
+
+    if (undoManager_)
+    {
+        undoManager_->perform(new RemoveLoopAction(*this, index));
+    }
+    else
+    {
+        loopRegions_.erase(loopRegions_.begin() + static_cast<ptrdiff_t>(index));
+        notifyLoopChanged();
+    }
+}
+
+void PatternModel::resizeLoopRegion(size_t index, double startBeat, double endBeat,
+                                     int minPitch, int maxPitch)
+{
+    if (index >= loopRegions_.size())
+        return;
+    if (endBeat <= startBeat || minPitch > maxPitch)
+        return;
+
+    LoopRegion lr = loopRegions_[index];
+    lr.startBeat = std::max(0.0, startBeat);
+    lr.endBeat = std::min(endBeat, lengthInBeats());
+    lr.minPitch = std::clamp(minPitch, 0, 127);
+    lr.maxPitch = std::clamp(maxPitch, 0, 127);
+
+    if (lr.length() <= 0.0)
+    {
+        removeLoopRegion(index);
+        return;
+    }
+
+    if (undoManager_)
+    {
+        undoManager_->perform(new ResizeLoopAction(*this, index, lr));
+    }
+    else
+    {
+        loopRegions_[index] = lr;
+        notifyLoopChanged();
+    }
+}
+
+int PatternModel::findLoopRegionAt(double beat, int pitch) const
+{
+    for (int i = 0; i < static_cast<int>(loopRegions_.size()); ++i)
+    {
+        const auto& lr = loopRegions_[i];
+        if (lr.active && beat >= lr.startBeat && beat < lr.endBeat && lr.containsPitch(pitch))
+            return i;
+    }
+    return -1;
+}
+
+void PatternModel::clearLoopRegions()
+{
+    if (loopRegions_.empty())
+        return;
+
+    if (undoManager_)
+    {
+        undoManager_->perform(new ClearLoopsAction(*this));
+    }
+    else
+    {
+        loopRegions_.clear();
+        notifyLoopChanged();
+    }
 }
 
 void PatternModel::sortNotes()
