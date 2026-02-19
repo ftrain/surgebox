@@ -108,6 +108,7 @@ void PatternKernel::toXML(TiXmlElement *parent) const
     kernelEl.SetAttribute("accumulateSemitones", accumulateSemitones);
     kernelEl.SetAttribute("resetAfter", resetAfterIterations);
     kernelEl.SetAttribute("seed", static_cast<int>(seed));
+    kernelEl.SetAttribute("followChords", followChords ? 1 : 0);
 
     for (const auto &cell : cells)
         cell.toXML(&kernelEl);
@@ -134,6 +135,10 @@ void PatternKernel::fromXML(TiXmlElement *element)
     int seedInt = 0;
     element->QueryIntAttribute("seed", &seedInt);
     seed = static_cast<uint32_t>(seedInt);
+
+    int fc = 0;
+    element->QueryIntAttribute("followChords", &fc);
+    followChords = (fc != 0);
 
     cells.clear();
     for (TiXmlElement *cellEl = element->FirstChildElement("cell"); cellEl;
@@ -289,6 +294,154 @@ PatternKernel invertMelody(int pivot)
 }
 
 } // namespace KernelPresets
+
+// ============================================================================
+// ChordEvent
+// ============================================================================
+
+const std::vector<int> &ChordEvent::getIntervals(ChordQuality q)
+{
+    static const std::vector<int> major = {0, 4, 7};
+    static const std::vector<int> minor = {0, 3, 7};
+    static const std::vector<int> dom7 = {0, 4, 7, 10};
+    static const std::vector<int> maj7 = {0, 4, 7, 11};
+    static const std::vector<int> min7 = {0, 3, 7, 10};
+    static const std::vector<int> dim = {0, 3, 6};
+    static const std::vector<int> aug = {0, 4, 8};
+    static const std::vector<int> sus2 = {0, 2, 7};
+    static const std::vector<int> sus4 = {0, 5, 7};
+    static const std::vector<int> power = {0, 7};
+
+    switch (q)
+    {
+        case ChordQuality::Major: return major;
+        case ChordQuality::Minor: return minor;
+        case ChordQuality::Dominant7: return dom7;
+        case ChordQuality::Major7: return maj7;
+        case ChordQuality::Minor7: return min7;
+        case ChordQuality::Diminished: return dim;
+        case ChordQuality::Augmented: return aug;
+        case ChordQuality::Sus2: return sus2;
+        case ChordQuality::Sus4: return sus4;
+        case ChordQuality::Power: return power;
+    }
+    return major;
+}
+
+bool ChordEvent::containsPitchClass(int pc) const
+{
+    int relative = ((pc - root) % 12 + 12) % 12;
+    const auto &intervals = getIntervals(quality);
+    return std::find(intervals.begin(), intervals.end(), relative) != intervals.end();
+}
+
+int ChordEvent::findNearestChordTone(int pitch) const
+{
+    const auto &intervals = getIntervals(quality);
+    int bestPitch = pitch;
+    int bestDist = 127;
+
+    for (int octaveShift = -1; octaveShift <= 1; ++octaveShift)
+    {
+        for (int interval : intervals)
+        {
+            int candidate = root + interval + (pitch / 12 + octaveShift) * 12;
+            int dist = std::abs(candidate - pitch);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                bestPitch = candidate;
+            }
+        }
+    }
+    return std::clamp(bestPitch, 0, 127);
+}
+
+void ChordEvent::toXML(TiXmlElement *parent) const
+{
+    TiXmlElement el("chord");
+    el.SetDoubleAttribute("beat", startBeat);
+    el.SetAttribute("root", root);
+    el.SetAttribute("quality", static_cast<int>(quality));
+    if (bassNote >= 0)
+        el.SetAttribute("bass", bassNote);
+    parent->InsertEndChild(el);
+}
+
+ChordEvent ChordEvent::fromXML(TiXmlElement *element)
+{
+    ChordEvent ev;
+    element->QueryDoubleAttribute("beat", &ev.startBeat);
+    element->QueryIntAttribute("root", &ev.root);
+    int q = 0;
+    element->QueryIntAttribute("quality", &q);
+    ev.quality = static_cast<ChordQuality>(std::clamp(q, 0, 9));
+    ev.bassNote = -1;
+    element->QueryIntAttribute("bass", &ev.bassNote);
+    return ev;
+}
+
+// ============================================================================
+// ChordProgression
+// ============================================================================
+
+const ChordEvent *ChordProgression::chordAtBeat(double beat) const
+{
+    if (events.empty())
+        return nullptr;
+
+    // Binary search for the last chord event at or before this beat
+    const ChordEvent *result = nullptr;
+    for (const auto &ev : events)
+    {
+        if (ev.startBeat <= beat)
+            result = &ev;
+        else
+            break;
+    }
+    return result;
+}
+
+void ChordProgression::sort()
+{
+    std::sort(events.begin(), events.end(),
+              [](const ChordEvent &a, const ChordEvent &b) { return a.startBeat < b.startBeat; });
+}
+
+void ChordProgression::clear()
+{
+    events.clear();
+    active = false;
+}
+
+void ChordProgression::toXML(TiXmlElement *parent) const
+{
+    if (events.empty())
+        return;
+
+    TiXmlElement progEl("chord_progression");
+    progEl.SetAttribute("active", active ? 1 : 0);
+
+    for (const auto &ev : events)
+        ev.toXML(&progEl);
+
+    parent->InsertEndChild(progEl);
+}
+
+void ChordProgression::fromXML(TiXmlElement *element)
+{
+    events.clear();
+    int act = 0;
+    element->QueryIntAttribute("active", &act);
+    active = (act != 0);
+
+    for (TiXmlElement *chordEl = element->FirstChildElement("chord"); chordEl;
+         chordEl = chordEl->NextSiblingElement("chord"))
+    {
+        events.push_back(ChordEvent::fromXML(chordEl));
+    }
+    sort();
+}
 
 // ============================================================================
 // Pattern
@@ -740,6 +893,8 @@ void GrooveboxProject::reset()
     for (int i = 0; i < NUM_GLOBAL_FX; i++)
         globalFX[i] = GlobalFXSlot();
 
+    chordProgression.clear();
+
     projectName = "Untitled";
     author.clear();
     comment.clear();
@@ -791,6 +946,9 @@ void GrooveboxProject::toXML(TiXmlDocument &doc)
     // Voices
     for (int i = 0; i < NUM_VOICES; i++)
         voices[i].toXML(&root, i);
+
+    // Chord progression
+    chordProgression.toXML(&root);
 
     // Metadata
     TiXmlElement metaEl("meta");
@@ -864,6 +1022,10 @@ void GrooveboxProject::fromXML(TiXmlDocument &doc)
         if (index >= 0 && index < NUM_VOICES)
             voices[index].fromXML(voiceEl, index);
     }
+
+    // Chord progression
+    if (TiXmlElement *chordProgEl = root->FirstChildElement("chord_progression"))
+        chordProgression.fromXML(chordProgEl);
 
     if (TiXmlElement *metaEl = root->FirstChildElement("meta"))
     {

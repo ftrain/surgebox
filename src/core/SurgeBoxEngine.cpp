@@ -256,6 +256,16 @@ void SequencerEngine::applyKernel(const MIDINote &sourceNote, const PatternKerne
         if (kernel.scaleAware && scaleType != ScaleType::Chromatic && cell.pitchOffset != 0)
             derivedPitch = MusicTheory::findNearestScalePitch(derivedPitch, kernel.scaleRoot, scaleType);
 
+        // Chord tracking: snap derived pitch to the nearest chord tone
+        if (kernel.followChords && project_ && project_->chordProgression.active)
+        {
+            double noteBeat = sourceNote.startBeat + cell.timeOffset;
+            if (noteBeat < 0.0) noteBeat += patternLength;
+            const ChordEvent *chord = project_->chordProgression.chordAtBeat(noteBeat);
+            if (chord)
+                derivedPitch = chord->findNearestChordTone(derivedPitch);
+        }
+
         derivedPitch = std::clamp(derivedPitch, 0, 127);
 
         // Compute derived time

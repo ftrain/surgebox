@@ -147,6 +147,9 @@ struct PatternKernel
     // Probability seed — 0 means use random seed each loop (fresh variation)
     uint32_t seed{0};
 
+    // Chord tracking — when true, kernel pitches follow the global chord progression
+    bool followChords{false};
+
     bool isActive() const { return mode != KernelMode::Off && !cells.empty(); }
 
     void toXML(TiXmlElement *parent) const;
@@ -167,6 +170,60 @@ namespace KernelPresets
     PatternKernel risingSequence();     // Transpose up 1 semitone per iteration
     PatternKernel invertMelody(int pivot = 60);  // Melodic inversion
 } // namespace KernelPresets
+
+// ============================================================================
+// Chord Progression — global harmonic timeline that voices can follow
+// ============================================================================
+
+enum class ChordQuality : int
+{
+    Major = 0,
+    Minor = 1,
+    Dominant7 = 2,
+    Major7 = 3,
+    Minor7 = 4,
+    Diminished = 5,
+    Augmented = 6,
+    Sus2 = 7,
+    Sus4 = 8,
+    Power = 9  // Root + 5th only
+};
+
+struct ChordEvent
+{
+    double startBeat{0.0};       // When this chord begins (in global beats)
+    int root{0};                 // Root note as pitch class (0=C, 1=C#, ..., 11=B)
+    ChordQuality quality{ChordQuality::Major};
+    int bassNote{-1};            // Slash chord bass (-1 = use root)
+
+    // Get the intervals (semitones from root) for this chord's quality
+    static const std::vector<int> &getIntervals(ChordQuality q);
+
+    // Check if a pitch class (0-11) belongs to this chord
+    bool containsPitchClass(int pc) const;
+
+    // Find the nearest chord tone to a given pitch
+    int findNearestChordTone(int pitch) const;
+
+    void toXML(TiXmlElement *parent) const;
+    static ChordEvent fromXML(TiXmlElement *element);
+};
+
+struct ChordProgression
+{
+    std::vector<ChordEvent> events;  // Sorted by startBeat
+    bool active{false};              // Global enable/disable
+
+    // Get the chord active at a given beat
+    const ChordEvent *chordAtBeat(double beat) const;
+
+    // Sort events by start beat
+    void sort();
+    void clear();
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
+};
 
 // ============================================================================
 // Pattern
@@ -266,6 +323,7 @@ class GrooveboxProject
 
     std::array<VoiceState, NUM_VOICES> voices;
     std::array<GlobalFXSlot, NUM_GLOBAL_FX> globalFX;
+    ChordProgression chordProgression;
 
     std::string projectName{"Untitled"};
     std::string author;

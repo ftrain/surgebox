@@ -959,6 +959,86 @@ void PianoRollWidget::rebuildGhostNotes()
         return;
     }
 
+    // If a kernel is active, generate ghost notes for kernel-derived notes
+    if (patternModel_ && patternModel_->getNumNotes() > 0)
+    {
+        // Read kernel from the auto-synced pattern (accessible via the engine)
+        const PatternKernel* kernel = nullptr;
+        if (engine_)
+        {
+            auto* activeModel = engine_->getActivePatternModel();
+            if (activeModel == patternModel_)
+            {
+                int voice = engine_->getActiveVoice();
+                kernel = &engine_->getProject().voices[voice].pattern.kernel;
+            }
+        }
+
+        if (kernel && kernel->isActive())
+        {
+            double patLen = patternModel_->lengthInBeats();
+
+            for (int i = 0; i < patternModel_->getNumNotes(); ++i)
+            {
+                double beat, dur;
+                int pitch, vel;
+                if (!patternModel_->getNoteAt(i, beat, dur, pitch, vel))
+                    continue;
+
+                // Build a temporary MIDINote for the kernel
+                MIDINote srcNote(beat, dur, static_cast<uint8_t>(pitch),
+                                 static_cast<uint8_t>(vel));
+
+                // Apply kernel with iteration 0 for preview (static preview)
+                for (const auto& cell : kernel->cells)
+                {
+                    // Skip the identity cell (pitchOffset=0, timeOffset=0) — that's the
+                    // original note, already drawn by the NoteLayer
+                    if (cell.pitchOffset == 0 && std::abs(cell.timeOffset) < 0.001)
+                        continue;
+
+                    int derivedPitch = pitch + cell.pitchOffset;
+                    if (kernel->scaleAware && scaleType_ != ScaleType::Chromatic && cell.pitchOffset != 0)
+                        derivedPitch = MusicTheory::findNearestScalePitch(derivedPitch, scaleRoot_, scaleType_);
+                    derivedPitch = std::clamp(derivedPitch, 0, 127);
+
+                    double derivedBeat = beat + cell.timeOffset;
+                    if (derivedBeat < 0.0)
+                        derivedBeat += patLen;
+                    if (derivedBeat >= patLen)
+                        derivedBeat = std::fmod(derivedBeat, patLen);
+
+                    ghostNotes_.push_back({derivedBeat, dur, derivedPitch});
+                }
+
+                // For Invert mode, show the inverted note
+                if (kernel->mode == KernelMode::Invert)
+                {
+                    int invertedPitch = 2 * kernel->pivotPitch - pitch;
+                    invertedPitch = std::clamp(invertedPitch, 0, 127);
+                    if (invertedPitch != pitch)
+                        ghostNotes_.push_back({beat, dur, invertedPitch});
+                }
+
+                // For Retrograde mode, show the reversed note
+                if (kernel->mode == KernelMode::Retrograde)
+                {
+                    double retroBeat = patLen - beat - dur;
+                    if (retroBeat < 0.0) retroBeat = 0.0;
+                    if (std::abs(retroBeat - beat) > 0.001)
+                        ghostNotes_.push_back({retroBeat, dur, pitch});
+                }
+            }
+
+            if (!ghostNotes_.empty())
+            {
+                ghostNoteLayer_->setGhostNotes(&ghostNotes_);
+                ghostNoteLayer_->repaint();
+                return;
+            }
+        }
+    }
+
     // Otherwise, preview from the current box selection (before Loop is clicked)
     if (selection_.empty())
     {
