@@ -102,8 +102,8 @@ void PianoRollWidget::setPatternModel(PatternModel* model)
     }
 
     selection_.clear();
+    hideSelectionToolbar();  // must run before resetting activeLoopIndex_ so deselectLoop() restores callbacks
     activeLoopIndex_ = -1;
-    hideSelectionToolbar();
     draggingNoteIndex_ = -1;
     rebuildGhostNotes();
 
