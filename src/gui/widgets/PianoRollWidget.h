@@ -92,6 +92,12 @@ class PianoRollWidget : public juce::Component
     void updatePlayhead(double beats);
     void hidePlayhead();
 
+    // Rebuild chord shading from engine's chord progression
+    void rebuildChordShadings();
+
+    // Rebuild ghost notes (kernel previews, loop tiles)
+    void rebuildGhostNotes();
+
   private:
     // Layers
     std::unique_ptr<GridLayer> gridLayer_;
@@ -108,7 +114,6 @@ class PianoRollWidget : public juce::Component
     std::unique_ptr<PianoRoll::SelectionToolbar> selectionToolbar_;
     void showSelectionToolbar(juce::Point<int> position);
     void hideSelectionToolbar();
-    void rebuildGhostNotes();
 
     // Toolbar operations
     void performLoop();
@@ -118,6 +123,9 @@ class PianoRollWidget : public juce::Component
 
     // Ghost notes for loop preview
     std::vector<GhostNote> ghostNotes_;
+
+    // Chord shading data (rebuilt when chord track changes)
+    std::vector<PianoRoll::ChordShading> chordShadings_;
 
     // Grid settings
     int lowestNote_{21};

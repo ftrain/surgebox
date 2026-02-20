@@ -21,6 +21,7 @@
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <random>
 
 namespace SurgeBox
 {
@@ -62,6 +63,18 @@ class SequencerEngine
                                    std::array<juce::MidiBuffer *, NUM_VOICES> midiBuffers,
                                    int baseSampleOffset = 0);
 
+    // Apply kernel transformation to a note, producing derived notes
+    struct DerivedNote
+    {
+        double startBeat;
+        double duration;
+        uint8_t pitch;
+        uint8_t velocity;
+    };
+    void applyKernel(const MIDINote &sourceNote, const PatternKernel &kernel,
+                     int voiceIndex, double patternLength,
+                     std::vector<DerivedNote> &out) const;
+
     GrooveboxProject *project_{nullptr};
 
     std::atomic<bool> playing_{false};
@@ -72,6 +85,14 @@ class SequencerEngine
     double beatsPerSample_{0.0};
     double blockStartBeat_{0.0};
     int numSamplesInBlock_{0};
+
+    // Per-voice iteration count (increments each time the voice's pattern loops)
+    std::array<int, NUM_VOICES> voiceIteration_{};
+    // Previous wrapped beat position per voice (to detect loop wraps)
+    std::array<double, NUM_VOICES> prevWrappedBeat_{};
+
+    // Per-voice PRNG for kernel probability evaluation
+    mutable std::array<std::mt19937, NUM_VOICES> voiceRng_{};
 
     struct ActiveNote
     {
@@ -134,8 +155,16 @@ class SurgeBoxEngine
 
     // Pattern models (with undo support)
     PatternModel *getPatternModel(int voice);
-    PatternModel *getActivePatternModel() { return getPatternModel(activeVoice_); }
+    PatternModel *getActivePatternModel();
+    PatternModel *getChordTrackModel() { return chordTrackModel_.get(); }
     juce::UndoManager &getUndoManager() { return undoManager_; }
+
+    // Chord track selection (separate from voice selection)
+    bool isChordTrackSelected() const { return chordTrackSelected_; }
+    void setChordTrackSelected(bool selected);
+
+    // Rebuild chord progression from chord track pattern
+    void rebuildChordProgression();
 
     // Project model (with undo support for non-pattern state)
     ProjectModel &getProjectModel() { return projectModel_; }
@@ -195,6 +224,7 @@ class SurgeBoxEngine
     // Callbacks for UI updates
     std::function<void(int)> onVoiceChanged;
     std::function<void(double)> onPlayheadMoved;
+    std::function<void()> onChordProgressionChanged;
 
   private:
     void mixVoices(float *outputL, float *outputR, int numSamples);
@@ -213,6 +243,8 @@ class SurgeBoxEngine
     ProjectModel projectModel_;
     MidiMappingEngine midiMappingEngine_;
     std::array<std::unique_ptr<PatternModel>, NUM_VOICES> patternModels_;
+    std::unique_ptr<PatternModel> chordTrackModel_;
+    bool chordTrackSelected_{false};
 
     int activeVoice_{0};
     double sampleRate_{44100.0};

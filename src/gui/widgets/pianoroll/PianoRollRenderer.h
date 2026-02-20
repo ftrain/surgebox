@@ -29,6 +29,14 @@ struct GhostNote
     int pitch;
 };
 
+struct ChordShading
+{
+    double startBeat;
+    double endBeat;
+    std::string chordName;
+    std::vector<int> chordPitchClasses;  // Pitch classes (0-11) in the chord
+};
+
 struct RenderParams
 {
     int noteWidth{18};
@@ -40,6 +48,7 @@ struct RenderParams
     const std::set<int>* selectedNotes{nullptr};
     bool isChromatic{true};
     int scaleRoot{0};
+    const std::vector<ChordShading>* chordShadings{nullptr};
 };
 
 // Draw the grid background

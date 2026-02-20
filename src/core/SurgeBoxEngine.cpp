@@ -7,6 +7,7 @@
  */
 
 #include "SurgeBoxEngine.h"
+#include "MusicTheory.h"
 #include "SurgeSynthProcessor.h"
 #include "globals.h"
 
@@ -104,6 +105,9 @@ void SequencerEngine::process(int numSamples, double sampleRate,
         playing_.store(false);
         pendingStop_.store(false);
         currentBeat_.store(0.0);
+        // Reset kernel iteration state
+        voiceIteration_.fill(0);
+        prevWrappedBeat_.fill(0.0);
         return;
     }
 
@@ -119,6 +123,9 @@ void SequencerEngine::process(int numSamples, double sampleRate,
         }
         activeNotes_.clear();
         currentBeat_.store(jumpTo);
+        // Reset kernel iteration state on position jump
+        voiceIteration_.fill(0);
+        prevWrappedBeat_.fill(0.0);
     }
 
     if (!playing_.load() || !project_)
@@ -185,6 +192,104 @@ void SequencerEngine::process(int numSamples, double sampleRate,
     }
 }
 
+void SequencerEngine::applyKernel(const MIDINote &sourceNote, const PatternKernel &kernel,
+                                  int voiceIndex, double patternLength,
+                                  std::vector<DerivedNote> &out) const
+{
+    int iteration = voiceIteration_[voiceIndex];
+
+    // Calculate accumulated pitch shift from iterations
+    int iterationShift = 0;
+    if (kernel.accumulateSemitones != 0)
+    {
+        int effectiveIteration = iteration;
+        if (kernel.resetAfterIterations > 0)
+            effectiveIteration = iteration % kernel.resetAfterIterations;
+        iterationShift = kernel.accumulateSemitones * effectiveIteration;
+    }
+
+    auto scaleType = static_cast<ScaleType>(std::clamp(kernel.scaleType, 0, 12));
+
+    // For Invert mode: mirror pitch around pivot
+    if (kernel.mode == KernelMode::Invert)
+    {
+        int invertedPitch = 2 * kernel.pivotPitch - sourceNote.pitch + iterationShift;
+        invertedPitch = std::clamp(invertedPitch, 0, 127);
+        if (kernel.scaleAware && scaleType != ScaleType::Chromatic)
+            invertedPitch = MusicTheory::findNearestScalePitch(invertedPitch, kernel.scaleRoot, scaleType);
+
+        out.push_back({sourceNote.startBeat, sourceNote.duration,
+                       static_cast<uint8_t>(invertedPitch), sourceNote.velocity});
+        return;
+    }
+
+    // For Retrograde mode: flip time within pattern
+    if (kernel.mode == KernelMode::Retrograde)
+    {
+        double retroStart = patternLength - sourceNote.startBeat - sourceNote.duration;
+        if (retroStart < 0.0)
+            retroStart = 0.0;
+        int pitch = std::clamp(static_cast<int>(sourceNote.pitch) + iterationShift, 0, 127);
+
+        out.push_back({retroStart, sourceNote.duration,
+                       static_cast<uint8_t>(pitch), sourceNote.velocity});
+        return;
+    }
+
+    // Spawn and Transform modes: iterate over kernel cells
+    auto &rng = voiceRng_[voiceIndex];
+
+    for (const auto &cell : kernel.cells)
+    {
+        // Evaluate probability
+        if (cell.probability < 1.0f)
+        {
+            std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+            if (dist(rng) > cell.probability)
+                continue;
+        }
+
+        // Compute derived pitch
+        int derivedPitch = static_cast<int>(sourceNote.pitch) + cell.pitchOffset + iterationShift;
+
+        // Scale-aware pitch snapping
+        if (kernel.scaleAware && scaleType != ScaleType::Chromatic && cell.pitchOffset != 0)
+            derivedPitch = MusicTheory::findNearestScalePitch(derivedPitch, kernel.scaleRoot, scaleType);
+
+        // Chord tracking: snap derived pitch to the nearest chord tone
+        if (kernel.followChords && project_ && project_->chordProgression.active)
+        {
+            double noteBeat = sourceNote.startBeat + cell.timeOffset;
+            if (noteBeat < 0.0) noteBeat += patternLength;
+            const ChordEvent *chord = project_->chordProgression.chordAtBeat(noteBeat);
+            if (chord)
+                derivedPitch = chord->findNearestChordTone(derivedPitch);
+        }
+
+        derivedPitch = std::clamp(derivedPitch, 0, 127);
+
+        // Compute derived time
+        double derivedStart = sourceNote.startBeat + cell.timeOffset;
+        // Wrap within pattern bounds
+        if (derivedStart < 0.0)
+            derivedStart += patternLength;
+        if (derivedStart >= patternLength)
+            derivedStart = std::fmod(derivedStart, patternLength);
+
+        // Compute derived velocity
+        int derivedVel = static_cast<int>(sourceNote.velocity * cell.velocityScale);
+        derivedVel = std::clamp(derivedVel, 1, 127);
+
+        // For Transform mode, only the first cell is used (replaces the note)
+        out.push_back({derivedStart, sourceNote.duration,
+                       static_cast<uint8_t>(derivedPitch),
+                       static_cast<uint8_t>(derivedVel)});
+
+        if (kernel.mode == KernelMode::Transform)
+            break;
+    }
+}
+
 void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int numSamples,
                                           std::array<juce::MidiBuffer *, NUM_VOICES> midiBuffers,
                                           int baseSampleOffset)
@@ -204,6 +309,9 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
     }
 
     double blockLength = endBeat - startBeat;
+
+    // Reusable buffer for kernel-derived notes (avoid per-block allocation)
+    thread_local std::vector<DerivedNote> derivedNotes;
 
     for (int v = 0; v < NUM_VOICES; v++)
     {
@@ -231,24 +339,86 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
         double wrappedStart = std::fmod(voiceStartBeat, patternLength);
         double wrappedEnd = wrappedStart + voiceBlockLength;
 
-        // Helper to add note-on with sample-accurate timing
-        // noteOffsetBeats is in voice-time, need to convert to global-time for sample position
-        auto addNoteOn = [&](const MIDINote *note, double noteOffsetBeatsVoiceTime) {
-            // Convert voice-time offset to global-time
+        // Detect pattern loop wrap to increment iteration counter
+        if (wrappedStart < prevWrappedBeat_[v] - 0.001)
+        {
+            voiceIteration_[v]++;
+            // Re-seed PRNG at each iteration for reproducible variation when seed != 0
+            const auto &kernel = voice.pattern.kernel;
+            if (kernel.seed != 0)
+                voiceRng_[v].seed(kernel.seed + static_cast<uint32_t>(voiceIteration_[v]));
+        }
+        prevWrappedBeat_[v] = wrappedStart;
+
+        const bool kernelActive = voice.pattern.kernel.isActive();
+
+        // Helper to add a note-on event with sample-accurate timing
+        // noteStartBeatVoiceTime: where the note starts in pattern-local voice-time
+        // noteOffsetBeatsVoiceTime: offset from wrappedStart in voice-time
+        auto addNoteOnDirect = [&](uint8_t pitch, uint8_t velocity, double duration,
+                                   double noteOffsetBeatsVoiceTime) {
+            // Apply snapToChord: snap pitch to nearest chord tone when enabled
+            uint8_t finalPitch = pitch;
+            if (voice.pattern.snapToChord && project_->chordProgression.active)
+            {
+                double noteBeat = wrappedStart + noteOffsetBeatsVoiceTime;
+                if (noteBeat >= patternLength)
+                    noteBeat -= patternLength;
+                const ChordEvent *chord = project_->chordProgression.chordAtBeat(noteBeat);
+                if (chord)
+                    finalPitch = static_cast<uint8_t>(
+                        std::clamp(chord->findNearestChordTone(finalPitch), 0, 127));
+            }
+
             double noteOffsetGlobal = multiplier > 0
                 ? noteOffsetBeatsVoiceTime / multiplier
                 : noteOffsetBeatsVoiceTime;
             int samplePos = baseSampleOffset + static_cast<int>(noteOffsetGlobal / beatsPerSample_);
             samplePos = std::clamp(samplePos, 0, numSamples - 1);
             midiBuffers[v]->addEvent(
-                juce::MidiMessage::noteOn(1, note->pitch, (juce::uint8)note->velocity),
+                juce::MidiMessage::noteOn(1, finalPitch, (juce::uint8)velocity),
                 samplePos);
-            // Note duration is also in voice-time, convert to global-time for end tracking
             double durationGlobal = multiplier > 0
-                ? note->duration / multiplier
-                : note->duration;
+                ? duration / multiplier
+                : duration;
             double noteEndGlobal = startBeat + noteOffsetGlobal + durationGlobal;
-            activeNotes_.push_back({v, note->pitch, noteEndGlobal});
+            activeNotes_.push_back({v, finalPitch, noteEndGlobal});
+        };
+
+        // Process a source note: either directly or through the kernel
+        auto processNote = [&](const MIDINote *note, double noteOffsetBeatsVoiceTime) {
+            if (!kernelActive)
+            {
+                addNoteOnDirect(note->pitch, note->velocity, note->duration,
+                                noteOffsetBeatsVoiceTime);
+                return;
+            }
+
+            // Apply kernel to source note, producing derived notes
+            derivedNotes.clear();
+            applyKernel(*note, voice.pattern.kernel, v, patternLength, derivedNotes);
+
+            for (const auto &dn : derivedNotes)
+            {
+                // The derived note's startBeat is in pattern-local time.
+                // We need to check if it falls within the current block's range.
+                // For Spawn/Transform mode with timeOffset=0, derived notes start
+                // at the same time as source, so noteOffset is the same.
+                // For non-zero timeOffset, the derived start may differ.
+                double derivedOffset = dn.startBeat - wrappedStart;
+
+                // Handle wrapping: if derived note's time is before current position
+                // (due to negative timeOffset wrapping), it may appear later in the pattern
+                if (derivedOffset < -0.001)
+                    derivedOffset += patternLength;
+
+                // Only schedule if this derived note falls within our current block
+                if (derivedOffset >= -0.001 && derivedOffset < voiceBlockLength + 0.001)
+                {
+                    derivedOffset = std::max(0.0, derivedOffset);
+                    addNoteOnDirect(dn.pitch, dn.velocity, dn.duration, derivedOffset);
+                }
+            }
         };
 
         // If this block would cross the pattern boundary, handle in two parts
@@ -259,7 +429,7 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
             for (const auto *note : notes1)
             {
                 double noteOffsetBeats = note->startBeat - wrappedStart;
-                addNoteOn(note, noteOffsetBeats);
+                processNote(note, noteOffsetBeats);
             }
 
             // Part 2: from 0 to remainder
@@ -267,9 +437,8 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
             auto notes2 = voice.pattern.getNotesStartingInRange(0.0, remainder);
             for (const auto *note : notes2)
             {
-                // Note starts at (patternLength - wrappedStart) beats into this block
                 double noteOffsetBeats = (patternLength - wrappedStart) + note->startBeat;
-                addNoteOn(note, noteOffsetBeats);
+                processNote(note, noteOffsetBeats);
             }
         }
         else
@@ -279,7 +448,7 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
             for (const auto *note : notesToTrigger)
             {
                 double noteOffsetBeats = note->startBeat - wrappedStart;
-                addNoteOn(note, noteOffsetBeats);
+                processNote(note, noteOffsetBeats);
             }
         }
     }
@@ -330,6 +499,13 @@ SurgeBoxEngine::SurgeBoxEngine()
         patternModels_[i] = std::make_unique<PatternModel>(&undoManager_);
         patternModels_[i]->setAutoSyncPattern(&project_.voices[i].pattern);
     }
+
+    // Create chord track pattern model with auto-rebuild of chord progression
+    chordTrackModel_ = std::make_unique<PatternModel>(&undoManager_);
+    chordTrackModel_->setAutoSyncPattern(&project_.chordTrack.pattern);
+    chordTrackModel_->onPatternChanged = [this]() {
+        rebuildChordProgression();
+    };
 
     // Connect project model to project for auto-sync
     projectModel_.setProject(&project_);
@@ -431,6 +607,8 @@ void SurgeBoxEngine::shutdown()
         if (model)
             model->onPatternChanged = nullptr;
     }
+    if (chordTrackModel_)
+        chordTrackModel_->onPatternChanged = nullptr;
 
     sequencer_.stop();
     masterFXChain_.shutdown();
@@ -720,6 +898,8 @@ void SurgeBoxEngine::syncPatternModelsFromProject()
         if (patternModels_[i])
             patternModels_[i]->loadFromPattern(project_.voices[i].pattern);
     }
+    if (chordTrackModel_)
+        chordTrackModel_->loadFromPattern(project_.chordTrack.pattern);
     projectModel_.syncFromProject();
 }
 
@@ -730,6 +910,27 @@ void SurgeBoxEngine::syncPatternModelsToProject()
         if (patternModels_[i])
             patternModels_[i]->saveToPattern(project_.voices[i].pattern);
     }
+    if (chordTrackModel_)
+        chordTrackModel_->saveToPattern(project_.chordTrack.pattern);
+}
+
+PatternModel *SurgeBoxEngine::getActivePatternModel()
+{
+    if (chordTrackSelected_)
+        return chordTrackModel_.get();
+    return getPatternModel(activeVoice_);
+}
+
+void SurgeBoxEngine::setChordTrackSelected(bool selected)
+{
+    chordTrackSelected_ = selected;
+}
+
+void SurgeBoxEngine::rebuildChordProgression()
+{
+    project_.chordTrack.rebuildChords(project_.chordProgression);
+    if (onChordProgressionChanged)
+        onChordProgressionChanged();
 }
 
 } // namespace SurgeBox

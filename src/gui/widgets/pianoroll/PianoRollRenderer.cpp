@@ -60,6 +60,43 @@ void drawGrid(juce::Graphics& g, const juce::Rectangle<int>& area,
         }
     }
 
+    // Draw chord shading — highlight chord tone columns with a tinted overlay
+    if (params.chordShadings && params.visiblePitches && !params.chordShadings->empty())
+    {
+        for (const auto& cs : *params.chordShadings)
+        {
+            int y1 = area.getY() + static_cast<int>(cs.startBeat * params.pixelsPerBeat);
+            int y2 = area.getY() + static_cast<int>(cs.endBeat * params.pixelsPerBeat);
+            int h = y2 - y1;
+            if (h <= 0) continue;
+
+            // Shade chord tone columns
+            for (int i = 0; i < numNotes; i++)
+            {
+                int pitch = (*params.visiblePitches)[i];
+                int pc = pitch % 12;
+                bool isChordTone = std::find(cs.chordPitchClasses.begin(),
+                                             cs.chordPitchClasses.end(), pc) !=
+                                   cs.chordPitchClasses.end();
+                if (isChordTone)
+                {
+                    int x = area.getX() + (i * params.noteWidth);
+                    g.setColour(juce::Colour(0x18448866));  // Subtle green tint
+                    g.fillRect(x, y1, params.noteWidth, h);
+                }
+            }
+
+            // Draw chord name label at the left edge
+            if (!cs.chordName.empty())
+            {
+                g.setColour(juce::Colour(0xaa88ccaa));
+                g.setFont(juce::Font(11.0f).boldened());
+                g.drawText(cs.chordName, area.getX() + 2, y1 + 1, 60, 14,
+                           juce::Justification::topLeft);
+            }
+        }
+    }
+
     // Draw vertical lines (pitch columns)
     for (int i = 0; i <= numNotes; i++)
     {

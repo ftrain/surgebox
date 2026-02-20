@@ -63,6 +63,606 @@ MIDINote MIDINote::fromXML(TiXmlElement *element)
 }
 
 // ============================================================================
+// KernelCell
+// ============================================================================
+
+void KernelCell::toXML(TiXmlElement *parent) const
+{
+    TiXmlElement cellEl("cell");
+    cellEl.SetAttribute("pitch", pitchOffset);
+    cellEl.SetDoubleAttribute("time", timeOffset);
+    cellEl.SetDoubleAttribute("vel", velocityScale);
+    cellEl.SetDoubleAttribute("prob", probability);
+    parent->InsertEndChild(cellEl);
+}
+
+KernelCell KernelCell::fromXML(TiXmlElement *element)
+{
+    KernelCell cell;
+    element->QueryIntAttribute("pitch", &cell.pitchOffset);
+    element->QueryDoubleAttribute("time", &cell.timeOffset);
+
+    double vel = 1.0, prob = 1.0;
+    element->QueryDoubleAttribute("vel", &vel);
+    element->QueryDoubleAttribute("prob", &prob);
+    cell.velocityScale = static_cast<float>(vel);
+    cell.probability = static_cast<float>(prob);
+    return cell;
+}
+
+// ============================================================================
+// PatternKernel
+// ============================================================================
+
+void PatternKernel::toXML(TiXmlElement *parent) const
+{
+    if (mode == KernelMode::Off)
+        return;
+
+    TiXmlElement kernelEl("kernel");
+    kernelEl.SetAttribute("mode", static_cast<int>(mode));
+    kernelEl.SetAttribute("scaleAware", scaleAware ? 1 : 0);
+    kernelEl.SetAttribute("scaleRoot", scaleRoot);
+    kernelEl.SetAttribute("scaleType", scaleType);
+    kernelEl.SetAttribute("pivotPitch", pivotPitch);
+    kernelEl.SetAttribute("accumulateSemitones", accumulateSemitones);
+    kernelEl.SetAttribute("resetAfter", resetAfterIterations);
+    kernelEl.SetAttribute("seed", static_cast<int>(seed));
+    kernelEl.SetAttribute("followChords", followChords ? 1 : 0);
+
+    for (const auto &cell : cells)
+        cell.toXML(&kernelEl);
+
+    parent->InsertEndChild(kernelEl);
+}
+
+void PatternKernel::fromXML(TiXmlElement *element)
+{
+    int modeInt = 0;
+    element->QueryIntAttribute("mode", &modeInt);
+    mode = static_cast<KernelMode>(std::clamp(modeInt, 0, 4));
+
+    int sa = 1;
+    element->QueryIntAttribute("scaleAware", &sa);
+    scaleAware = (sa != 0);
+
+    element->QueryIntAttribute("scaleRoot", &scaleRoot);
+    element->QueryIntAttribute("scaleType", &scaleType);
+    element->QueryIntAttribute("pivotPitch", &pivotPitch);
+    element->QueryIntAttribute("accumulateSemitones", &accumulateSemitones);
+    element->QueryIntAttribute("resetAfter", &resetAfterIterations);
+
+    int seedInt = 0;
+    element->QueryIntAttribute("seed", &seedInt);
+    seed = static_cast<uint32_t>(seedInt);
+
+    int fc = 0;
+    element->QueryIntAttribute("followChords", &fc);
+    followChords = (fc != 0);
+
+    cells.clear();
+    for (TiXmlElement *cellEl = element->FirstChildElement("cell"); cellEl;
+         cellEl = cellEl->NextSiblingElement("cell"))
+    {
+        cells.push_back(KernelCell::fromXML(cellEl));
+    }
+}
+
+// ============================================================================
+// Kernel Presets
+// ============================================================================
+
+namespace KernelPresets
+{
+
+PatternKernel arpeggioUp()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Identity (original note) + major 3rd at +1/4 beat + perfect 5th at +1/2 beat
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.25, 0.85f, 1.0f},
+        {7, 0.5, 0.7f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel arpeggioDown()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Start high, descend: 5th, 3rd, root
+    k.cells = {
+        {7, 0.0, 1.0f, 1.0f},
+        {4, 0.25, 0.85f, 1.0f},
+        {0, 0.5, 0.7f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel arpeggioUpDown()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Root -> 3rd -> 5th -> octave -> 5th -> 3rd (6 cells over 1.5 beats)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.25, 0.9f, 1.0f},
+        {7, 0.5, 0.8f, 1.0f},
+        {12, 0.75, 0.85f, 1.0f},
+        {7, 1.0, 0.75f, 1.0f},
+        {4, 1.25, 0.65f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel chord()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Simultaneous major triad (no time offset)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.0, 0.85f, 1.0f},
+        {7, 0.0, 0.75f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel octaveDouble()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {12, 0.0, 0.7f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel echo()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    // Three echoes: original + two repeats with decay
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {0, 0.75, 0.5f, 1.0f},
+        {0, 1.5, 0.25f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel strum()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = true;
+    // Micro-timed chord spread (guitar-like)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+        {4, 0.03, 0.9f, 1.0f},
+        {7, 0.06, 0.85f, 1.0f},
+        {12, 0.09, 0.8f, 1.0f},
+    };
+    return k;
+}
+
+PatternKernel probabilityThin()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    // Only cell is the identity with 60% probability — 40% of notes drop out
+    k.cells = {
+        {0, 0.0, 1.0f, 0.6f},
+    };
+    return k;
+}
+
+PatternKernel risingSequence()
+{
+    PatternKernel k;
+    k.mode = KernelMode::Spawn;
+    k.scaleAware = false;
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+    };
+    // Rise 1 semitone per iteration, reset after 12 (full octave cycle)
+    k.accumulateSemitones = 1;
+    k.resetAfterIterations = 12;
+    return k;
+}
+
+PatternKernel invertMelody(int pivot)
+{
+    PatternKernel k;
+    k.mode = KernelMode::Invert;
+    k.pivotPitch = pivot;
+    // Identity cell required (the inversion replaces pitch)
+    k.cells = {
+        {0, 0.0, 1.0f, 1.0f},
+    };
+    return k;
+}
+
+} // namespace KernelPresets
+
+// ============================================================================
+// ChordEvent
+// ============================================================================
+
+const std::vector<int> &ChordEvent::getIntervals(ChordQuality q)
+{
+    static const std::vector<int> major = {0, 4, 7};
+    static const std::vector<int> minor = {0, 3, 7};
+    static const std::vector<int> dom7 = {0, 4, 7, 10};
+    static const std::vector<int> maj7 = {0, 4, 7, 11};
+    static const std::vector<int> min7 = {0, 3, 7, 10};
+    static const std::vector<int> dim = {0, 3, 6};
+    static const std::vector<int> aug = {0, 4, 8};
+    static const std::vector<int> sus2 = {0, 2, 7};
+    static const std::vector<int> sus4 = {0, 5, 7};
+    static const std::vector<int> power = {0, 7};
+
+    switch (q)
+    {
+        case ChordQuality::Major: return major;
+        case ChordQuality::Minor: return minor;
+        case ChordQuality::Dominant7: return dom7;
+        case ChordQuality::Major7: return maj7;
+        case ChordQuality::Minor7: return min7;
+        case ChordQuality::Diminished: return dim;
+        case ChordQuality::Augmented: return aug;
+        case ChordQuality::Sus2: return sus2;
+        case ChordQuality::Sus4: return sus4;
+        case ChordQuality::Power: return power;
+    }
+    return major;
+}
+
+bool ChordEvent::containsPitchClass(int pc) const
+{
+    int relative = ((pc - root) % 12 + 12) % 12;
+    const auto &intervals = getIntervals(quality);
+    return std::find(intervals.begin(), intervals.end(), relative) != intervals.end();
+}
+
+int ChordEvent::findNearestChordTone(int pitch) const
+{
+    const auto &intervals = getIntervals(quality);
+    int bestPitch = pitch;
+    int bestDist = 127;
+
+    for (int octaveShift = -1; octaveShift <= 1; ++octaveShift)
+    {
+        for (int interval : intervals)
+        {
+            int candidate = root + interval + (pitch / 12 + octaveShift) * 12;
+            int dist = std::abs(candidate - pitch);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                bestPitch = candidate;
+            }
+        }
+    }
+    return std::clamp(bestPitch, 0, 127);
+}
+
+void ChordEvent::toXML(TiXmlElement *parent) const
+{
+    TiXmlElement el("chord");
+    el.SetDoubleAttribute("beat", startBeat);
+    el.SetAttribute("root", root);
+    el.SetAttribute("quality", static_cast<int>(quality));
+    if (bassNote >= 0)
+        el.SetAttribute("bass", bassNote);
+    parent->InsertEndChild(el);
+}
+
+ChordEvent ChordEvent::fromXML(TiXmlElement *element)
+{
+    ChordEvent ev;
+    element->QueryDoubleAttribute("beat", &ev.startBeat);
+    element->QueryIntAttribute("root", &ev.root);
+    int q = 0;
+    element->QueryIntAttribute("quality", &q);
+    ev.quality = static_cast<ChordQuality>(std::clamp(q, 0, 9));
+    ev.bassNote = -1;
+    element->QueryIntAttribute("bass", &ev.bassNote);
+    return ev;
+}
+
+// ============================================================================
+// ChordProgression
+// ============================================================================
+
+const ChordEvent *ChordProgression::chordAtBeat(double beat) const
+{
+    if (events.empty())
+        return nullptr;
+
+    // Binary search for the last chord event at or before this beat
+    const ChordEvent *result = nullptr;
+    for (const auto &ev : events)
+    {
+        if (ev.startBeat <= beat)
+            result = &ev;
+        else
+            break;
+    }
+    return result;
+}
+
+void ChordProgression::sort()
+{
+    std::sort(events.begin(), events.end(),
+              [](const ChordEvent &a, const ChordEvent &b) { return a.startBeat < b.startBeat; });
+}
+
+void ChordProgression::clear()
+{
+    events.clear();
+    active = false;
+}
+
+void ChordProgression::toXML(TiXmlElement *parent) const
+{
+    if (events.empty())
+        return;
+
+    TiXmlElement progEl("chord_progression");
+    progEl.SetAttribute("active", active ? 1 : 0);
+
+    for (const auto &ev : events)
+        ev.toXML(&progEl);
+
+    parent->InsertEndChild(progEl);
+}
+
+void ChordProgression::fromXML(TiXmlElement *element)
+{
+    events.clear();
+    int act = 0;
+    element->QueryIntAttribute("active", &act);
+    active = (act != 0);
+
+    for (TiXmlElement *chordEl = element->FirstChildElement("chord"); chordEl;
+         chordEl = chordEl->NextSiblingElement("chord"))
+    {
+        events.push_back(ChordEvent::fromXML(chordEl));
+    }
+    sort();
+}
+
+// ============================================================================
+// ChordRecognition
+// ============================================================================
+
+namespace ChordRecognition
+{
+
+static const char *noteNames[] = {"C", "C#", "D", "D#", "E", "F",
+                                   "F#", "G", "G#", "A", "A#", "B"};
+
+// Build an interval set from pitch classes relative to a candidate root
+static std::vector<int> intervalsFrom(const std::vector<int> &pcs, int root)
+{
+    std::vector<int> intervals;
+    for (int pc : pcs)
+    {
+        int interval = ((pc - root) % 12 + 12) % 12;
+        intervals.push_back(interval);
+    }
+    std::sort(intervals.begin(), intervals.end());
+    // Remove duplicates
+    intervals.erase(std::unique(intervals.begin(), intervals.end()), intervals.end());
+    return intervals;
+}
+
+// Try to match an interval set against known chord qualities
+static bool matchQuality(const std::vector<int> &intervals, ChordQuality &outQuality)
+{
+    // Check each quality
+    for (int q = 0; q <= static_cast<int>(ChordQuality::Power); ++q)
+    {
+        auto quality = static_cast<ChordQuality>(q);
+        const auto &ref = ChordEvent::getIntervals(quality);
+        if (intervals.size() >= ref.size())
+        {
+            // Check if ref is a subset of intervals
+            bool match = true;
+            for (int r : ref)
+            {
+                if (std::find(intervals.begin(), intervals.end(), r) == intervals.end())
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match)
+            {
+                outQuality = quality;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+ChordResult identify(const std::vector<int> &pitchClasses)
+{
+    ChordResult result;
+    if (pitchClasses.empty())
+        return result;
+
+    if (pitchClasses.size() == 1)
+    {
+        // Single note = power chord (root + implied 5th)
+        result.root = pitchClasses[0];
+        result.quality = ChordQuality::Power;
+        result.recognized = true;
+        return result;
+    }
+
+    // Try each pitch class as a candidate root, prefer the lowest
+    for (int pc : pitchClasses)
+    {
+        auto intervals = intervalsFrom(pitchClasses, pc);
+        ChordQuality quality;
+        if (matchQuality(intervals, quality))
+        {
+            result.root = pc;
+            result.quality = quality;
+            result.recognized = true;
+            return result;
+        }
+    }
+
+    // Fallback: use lowest pitch class as root, call it Major
+    result.root = pitchClasses[0];
+    result.quality = ChordQuality::Major;
+    result.recognized = false;
+    return result;
+}
+
+std::string chordName(int root, ChordQuality quality)
+{
+    std::string name = noteNames[root % 12];
+    switch (quality)
+    {
+        case ChordQuality::Major: break;  // Just the note name
+        case ChordQuality::Minor: name += "m"; break;
+        case ChordQuality::Dominant7: name += "7"; break;
+        case ChordQuality::Major7: name += "maj7"; break;
+        case ChordQuality::Minor7: name += "m7"; break;
+        case ChordQuality::Diminished: name += "dim"; break;
+        case ChordQuality::Augmented: name += "aug"; break;
+        case ChordQuality::Sus2: name += "sus2"; break;
+        case ChordQuality::Sus4: name += "sus4"; break;
+        case ChordQuality::Power: name += "5"; break;
+    }
+    return name;
+}
+
+std::string chordName(const ChordEvent &ev)
+{
+    return chordName(ev.root, ev.quality);
+}
+
+} // namespace ChordRecognition
+
+// ============================================================================
+// ChordTrack
+// ============================================================================
+
+ChordTrack::ChordTrack()
+{
+    pattern.bars = 4;
+}
+
+ChordTrack::ChordTrack(const ChordTrack &other)
+    : pattern(other.pattern),
+      tempoMultiplier(other.tempoMultiplier.load()),
+      pendingTempoMultiplier(other.pendingTempoMultiplier.load())
+{
+}
+
+ChordTrack &ChordTrack::operator=(const ChordTrack &other)
+{
+    if (this != &other)
+    {
+        pattern = other.pattern;
+        tempoMultiplier.store(other.tempoMultiplier.load());
+        pendingTempoMultiplier.store(other.pendingTempoMultiplier.load());
+    }
+    return *this;
+}
+
+void ChordTrack::rebuildChords(ChordProgression &prog) const
+{
+    prog.events.clear();
+
+    if (pattern.notes.empty())
+    {
+        prog.active = false;
+        return;
+    }
+
+    // Group notes by beat position (within tolerance)
+    constexpr double tolerance = 0.01;
+    std::vector<std::pair<double, std::vector<int>>> groups;
+
+    for (const auto &note : pattern.notes)
+    {
+        // Find existing group at this beat
+        bool found = false;
+        for (auto &group : groups)
+        {
+            if (std::abs(group.first - note.startBeat) < tolerance)
+            {
+                group.second.push_back(note.pitch % 12);
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            groups.push_back({note.startBeat, {note.pitch % 12}});
+    }
+
+    // Sort groups by beat
+    std::sort(groups.begin(), groups.end(),
+              [](const auto &a, const auto &b) { return a.first < b.first; });
+
+    // Analyze each group into a chord event
+    for (const auto &group : groups)
+    {
+        // Deduplicate pitch classes
+        auto pcs = group.second;
+        std::sort(pcs.begin(), pcs.end());
+        pcs.erase(std::unique(pcs.begin(), pcs.end()), pcs.end());
+
+        auto result = ChordRecognition::identify(pcs);
+
+        ChordEvent ev;
+        ev.startBeat = group.first;
+        ev.root = result.root;
+        ev.quality = result.quality;
+        prog.events.push_back(ev);
+    }
+
+    prog.sort();
+    prog.active = !prog.events.empty();
+}
+
+void ChordTrack::toXML(TiXmlElement *parent) const
+{
+    TiXmlElement trackEl("chord_track");
+    trackEl.SetDoubleAttribute("tempoMul", tempoMultiplier.load());
+    pattern.toXML(&trackEl);
+    parent->InsertEndChild(trackEl);
+}
+
+void ChordTrack::fromXML(TiXmlElement *element)
+{
+    double tm = 1.0;
+    element->QueryDoubleAttribute("tempoMul", &tm);
+    tempoMultiplier.store(tm);
+    pendingTempoMultiplier.store(tm);
+
+    if (TiXmlElement *patternEl = element->FirstChildElement("pattern"))
+        pattern.fromXML(patternEl);
+}
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -206,6 +806,8 @@ void Pattern::toXML(TiXmlElement *parent) const
     TiXmlElement patternEl("pattern");
     patternEl.SetAttribute("bars", bars);
     patternEl.SetDoubleAttribute("swing", swing);
+    if (snapToChord)
+        patternEl.SetAttribute("snapToChord", 1);
 
     for (const auto &lr : loopRegions)
     {
@@ -222,6 +824,8 @@ void Pattern::toXML(TiXmlElement *parent) const
     for (const auto &note : notes)
         note.toXML(&patternEl);
 
+    kernel.toXML(&patternEl);
+
     parent->InsertEndChild(patternEl);
 }
 
@@ -231,6 +835,9 @@ void Pattern::fromXML(TiXmlElement *element)
     loopRegions.clear();
     element->QueryIntAttribute("bars", &bars);
     element->QueryDoubleAttribute("swing", &swing);
+    int stc = 0;
+    element->QueryIntAttribute("snapToChord", &stc);
+    snapToChord = (stc != 0);
 
     for (TiXmlElement *loopEl = element->FirstChildElement("loop"); loopEl;
          loopEl = loopEl->NextSiblingElement("loop"))
@@ -249,6 +856,10 @@ void Pattern::fromXML(TiXmlElement *element)
     {
         notes.push_back(MIDINote::fromXML(noteEl));
     }
+
+    if (TiXmlElement *kernelEl = element->FirstChildElement("kernel"))
+        kernel.fromXML(kernelEl);
+
     sortNotes();
     rebuildLoopNotes();
 }
@@ -506,6 +1117,10 @@ void GrooveboxProject::reset()
     for (int i = 0; i < NUM_GLOBAL_FX; i++)
         globalFX[i] = GlobalFXSlot();
 
+    chordTrack = ChordTrack();
+    chordTrack.pattern.bars = loopBars;
+    chordProgression.clear();
+
     projectName = "Untitled";
     author.clear();
     comment.clear();
@@ -557,6 +1172,10 @@ void GrooveboxProject::toXML(TiXmlDocument &doc)
     // Voices
     for (int i = 0; i < NUM_VOICES; i++)
         voices[i].toXML(&root, i);
+
+    // Chord track and derived progression
+    chordTrack.toXML(&root);
+    chordProgression.toXML(&root);
 
     // Metadata
     TiXmlElement metaEl("meta");
@@ -630,6 +1249,16 @@ void GrooveboxProject::fromXML(TiXmlDocument &doc)
         if (index >= 0 && index < NUM_VOICES)
             voices[index].fromXML(voiceEl, index);
     }
+
+    // Chord track
+    if (TiXmlElement *chordTrackEl = root->FirstChildElement("chord_track"))
+        chordTrack.fromXML(chordTrackEl);
+
+    // Chord progression (rebuild from chord track, or load saved)
+    if (TiXmlElement *chordProgEl = root->FirstChildElement("chord_progression"))
+        chordProgression.fromXML(chordProgEl);
+    else
+        chordTrack.rebuildChords(chordProgression);
 
     if (TiXmlElement *metaEl = root->FirstChildElement("meta"))
     {

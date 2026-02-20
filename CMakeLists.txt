@@ -267,6 +267,9 @@ target_sources(surgebox PRIVATE
     # GUI - Master FX Editor
     src/gui/widgets/MasterFXEditor.cpp
     src/gui/widgets/MasterFXEditor.h
+    # GUI - Kernel Editor
+    src/gui/widgets/KernelEditorPanel.cpp
+    src/gui/widgets/KernelEditorPanel.h
     # GUI - Piano Roll
     src/gui/widgets/PianoRollWidget.cpp
     src/gui/widgets/PianoRollWidget.h
@@ -415,3 +418,19 @@ add_dependencies(surgebox-all surgebox_VST3 surgebox_Standalone)
 if(APPLE)
     add_dependencies(surgebox-all surgebox_AU)
 endif()
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+add_executable(surgebox-tests
+    tests/KernelTests.cpp
+)
+
+target_link_libraries(surgebox-tests PRIVATE
+    surgebox-core
+)
+
+target_include_directories(surgebox-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)

@@ -102,6 +102,130 @@ struct LoopRegion
 };
 
 // ============================================================================
+// Pattern Kernel — matrix transformation applied per-note at playback time
+// ============================================================================
+
+// A single kernel cell: defines one derived note relative to each source note
+struct KernelCell
+{
+    int pitchOffset{0};         // Semitones relative to source note
+    double timeOffset{0.0};     // Beats relative to source note start
+    float velocityScale{1.0f};  // Multiply source velocity (0.0–1.0)
+    float probability{1.0f};    // Chance this cell fires (0.0–1.0)
+
+    void toXML(TiXmlElement *parent) const;
+    static KernelCell fromXML(TiXmlElement *element);
+};
+
+// How the kernel interacts with the source pattern
+enum class KernelMode : int
+{
+    Off = 0,        // Kernel disabled, play pattern as-is
+    Spawn = 1,      // Each source note spawns additional notes from kernel cells
+    Transform = 2,  // Kernel cells replace the source note (first cell = the note)
+    Invert = 3,     // Mirror pitches around pivotPitch
+    Retrograde = 4  // Reverse the time axis of the pattern
+};
+
+struct PatternKernel
+{
+    KernelMode mode{KernelMode::Off};
+    std::vector<KernelCell> cells;
+
+    // Scale-awareness: snap kernel-generated pitches to this scale
+    bool scaleAware{true};       // When true, pitchOffsets are in scale degrees, not semitones
+    int scaleRoot{0};            // MIDI note number of scale root (0=C)
+    int scaleType{0};            // Maps to ScaleType enum
+
+    // Pivot for Invert mode
+    int pivotPitch{60};          // Center pitch for melodic inversion
+
+    // Iteration behavior (how kernel evolves across pattern loops)
+    int accumulateSemitones{0};  // Add N semitones per iteration (rising/falling sequences)
+    int resetAfterIterations{0}; // Reset accumulation after N iterations (0 = never)
+
+    // Probability seed — 0 means use random seed each loop (fresh variation)
+    uint32_t seed{0};
+
+    // Chord tracking — when true, kernel pitches follow the global chord progression
+    bool followChords{false};
+
+    bool isActive() const { return mode != KernelMode::Off && !cells.empty(); }
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
+};
+
+// Factory presets for common musical kernels
+namespace KernelPresets
+{
+    PatternKernel arpeggioUp();         // Major triad rising
+    PatternKernel arpeggioDown();       // Major triad falling
+    PatternKernel arpeggioUpDown();     // Up then down
+    PatternKernel chord();              // Simultaneous major triad
+    PatternKernel octaveDouble();       // Double an octave up
+    PatternKernel echo();               // Rhythmic echo with decay
+    PatternKernel strum();              // Guitar-like micro-timing
+    PatternKernel probabilityThin();    // Random note dropout
+    PatternKernel risingSequence();     // Transpose up 1 semitone per iteration
+    PatternKernel invertMelody(int pivot = 60);  // Melodic inversion
+} // namespace KernelPresets
+
+// ============================================================================
+// Chord Progression — global harmonic timeline that voices can follow
+// ============================================================================
+
+enum class ChordQuality : int
+{
+    Major = 0,
+    Minor = 1,
+    Dominant7 = 2,
+    Major7 = 3,
+    Minor7 = 4,
+    Diminished = 5,
+    Augmented = 6,
+    Sus2 = 7,
+    Sus4 = 8,
+    Power = 9  // Root + 5th only
+};
+
+struct ChordEvent
+{
+    double startBeat{0.0};       // When this chord begins (in global beats)
+    int root{0};                 // Root note as pitch class (0=C, 1=C#, ..., 11=B)
+    ChordQuality quality{ChordQuality::Major};
+    int bassNote{-1};            // Slash chord bass (-1 = use root)
+
+    // Get the intervals (semitones from root) for this chord's quality
+    static const std::vector<int> &getIntervals(ChordQuality q);
+
+    // Check if a pitch class (0-11) belongs to this chord
+    bool containsPitchClass(int pc) const;
+
+    // Find the nearest chord tone to a given pitch
+    int findNearestChordTone(int pitch) const;
+
+    void toXML(TiXmlElement *parent) const;
+    static ChordEvent fromXML(TiXmlElement *element);
+};
+
+struct ChordProgression
+{
+    std::vector<ChordEvent> events;  // Sorted by startBeat
+    bool active{false};              // Global enable/disable
+
+    // Get the chord active at a given beat
+    const ChordEvent *chordAtBeat(double beat) const;
+
+    // Sort events by start beat
+    void sort();
+    void clear();
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
+};
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -111,6 +235,8 @@ struct Pattern
     int bars{4};
     double swing{0.0};
     std::vector<LoopRegion> loopRegions;
+    PatternKernel kernel;
+    bool snapToChord{false};  // When true, snap all note pitches to the active chord
 
     double lengthInBeats() const { return bars * 4.0; }
 
@@ -133,6 +259,48 @@ struct Pattern
   private:
     // Cached looped copies (rebuilt when notes or loop region change)
     std::vector<MIDINote> loopedNotes_;
+};
+
+// ============================================================================
+// Chord Track — a control track whose notes define the chord progression
+// ============================================================================
+
+namespace ChordRecognition
+{
+    struct ChordResult
+    {
+        int root{0};
+        ChordQuality quality{ChordQuality::Major};
+        bool recognized{false};
+    };
+
+    // Given a set of pitch classes (0-11), identify chord quality and root
+    ChordResult identify(const std::vector<int> &pitchClasses);
+
+    // Human-readable chord name: "C", "Am7", "F#dim", etc.
+    std::string chordName(int root, ChordQuality quality);
+    std::string chordName(const ChordEvent &ev);
+} // namespace ChordRecognition
+
+struct ChordTrack
+{
+    Pattern pattern;
+    std::atomic<double> tempoMultiplier{1.0};
+    std::atomic<double> pendingTempoMultiplier{1.0};
+
+    // Limited pitch range for chord entry (2 octaves: C3–C5)
+    static constexpr int LOWEST_NOTE = 48;
+    static constexpr int HIGHEST_NOTE = 73;
+
+    ChordTrack();
+    ChordTrack(const ChordTrack &other);
+    ChordTrack &operator=(const ChordTrack &other);
+
+    // Analyze pattern notes into ChordProgression events
+    void rebuildChords(ChordProgression &prog) const;
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
 };
 
 // ============================================================================
@@ -198,6 +366,8 @@ class GrooveboxProject
 
     std::array<VoiceState, NUM_VOICES> voices;
     std::array<GlobalFXSlot, NUM_GLOBAL_FX> globalFX;
+    ChordTrack chordTrack;
+    ChordProgression chordProgression;  // Derived from chordTrack.pattern
 
     std::string projectName{"Untitled"};
     std::string author;

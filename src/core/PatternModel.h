@@ -26,6 +26,7 @@ inline const juce::Identifier duration{"duration"};
 inline const juce::Identifier pitch{"pitch"};
 inline const juce::Identifier originalPitch{"originalPitch"};  // Chromatic pitch before scale quantization
 inline const juce::Identifier velocity{"velocity"};
+inline const juce::Identifier snapToChord{"snapToChord"};
 } // namespace IDs
 
 /**
@@ -49,6 +50,8 @@ class PatternModel : public juce::ValueTree::Listener
     double getSwing() const;
     void setSwing(double swing);
     double lengthInBeats() const { return getBars() * 4.0; }
+    bool getSnapToChord() const;
+    void setSnapToChord(bool snap);
 
     // Note operations (all undoable when UndoManager is set)
     void addNote(double startBeat, double duration, int pitch, int velocity);
