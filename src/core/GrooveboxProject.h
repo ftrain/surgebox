@@ -226,6 +226,42 @@ struct ChordProgression
 };
 
 // ============================================================================
+// Pattern
+// ============================================================================
+
+struct Pattern
+{
+    std::vector<MIDINote> notes;
+    int bars{4};
+    double swing{0.0};
+    std::vector<LoopRegion> loopRegions;
+    PatternKernel kernel;
+    bool snapToChord{false};  // When true, snap all note pitches to the active chord
+
+    double lengthInBeats() const { return bars * 4.0; }
+
+    void addNote(double startBeat, double duration, uint8_t pitch, uint8_t velocity);
+    void removeNote(size_t index);
+    void removeNotesAt(double beat, uint8_t pitch, double tolerance = 0.01);
+    void clear();
+    void sortNotes();
+
+    MIDINote *findNoteAt(double beat, uint8_t pitch, double tolerance = 0.01);
+    std::vector<MIDINote *> getNotesInRange(double startBeat, double endBeat);
+    std::vector<const MIDINote *> getNotesStartingInRange(double startBeat, double endBeat) const;
+
+    // Rebuild cached loop notes from source region
+    void rebuildLoopNotes();
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
+
+  private:
+    // Cached looped copies (rebuilt when notes or loop region change)
+    std::vector<MIDINote> loopedNotes_;
+};
+
+// ============================================================================
 // Chord Track — a control track whose notes define the chord progression
 // ============================================================================
 
@@ -265,42 +301,6 @@ struct ChordTrack
 
     void toXML(TiXmlElement *parent) const;
     void fromXML(TiXmlElement *element);
-};
-
-// ============================================================================
-// Pattern
-// ============================================================================
-
-struct Pattern
-{
-    std::vector<MIDINote> notes;
-    int bars{4};
-    double swing{0.0};
-    std::vector<LoopRegion> loopRegions;
-    PatternKernel kernel;
-    bool snapToChord{false};  // When true, snap all note pitches to the active chord
-
-    double lengthInBeats() const { return bars * 4.0; }
-
-    void addNote(double startBeat, double duration, uint8_t pitch, uint8_t velocity);
-    void removeNote(size_t index);
-    void removeNotesAt(double beat, uint8_t pitch, double tolerance = 0.01);
-    void clear();
-    void sortNotes();
-
-    MIDINote *findNoteAt(double beat, uint8_t pitch, double tolerance = 0.01);
-    std::vector<MIDINote *> getNotesInRange(double startBeat, double endBeat);
-    std::vector<const MIDINote *> getNotesStartingInRange(double startBeat, double endBeat) const;
-
-    // Rebuild cached loop notes from source region
-    void rebuildLoopNotes();
-
-    void toXML(TiXmlElement *parent) const;
-    void fromXML(TiXmlElement *element);
-
-  private:
-    // Cached looped copies (rebuilt when notes or loop region change)
-    std::vector<MIDINote> loopedNotes_;
 };
 
 // ============================================================================

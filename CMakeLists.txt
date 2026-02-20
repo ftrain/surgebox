@@ -418,3 +418,19 @@ add_dependencies(surgebox-all surgebox_VST3 surgebox_Standalone)
 if(APPLE)
     add_dependencies(surgebox-all surgebox_AU)
 endif()
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+add_executable(surgebox-tests
+    tests/KernelTests.cpp
+)
+
+target_link_libraries(surgebox-tests PRIVATE
+    surgebox-core
+)
+
+target_include_directories(surgebox-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
