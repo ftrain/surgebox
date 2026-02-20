@@ -444,6 +444,225 @@ void ChordProgression::fromXML(TiXmlElement *element)
 }
 
 // ============================================================================
+// ChordRecognition
+// ============================================================================
+
+namespace ChordRecognition
+{
+
+static const char *noteNames[] = {"C", "C#", "D", "D#", "E", "F",
+                                   "F#", "G", "G#", "A", "A#", "B"};
+
+// Build an interval set from pitch classes relative to a candidate root
+static std::vector<int> intervalsFrom(const std::vector<int> &pcs, int root)
+{
+    std::vector<int> intervals;
+    for (int pc : pcs)
+    {
+        int interval = ((pc - root) % 12 + 12) % 12;
+        intervals.push_back(interval);
+    }
+    std::sort(intervals.begin(), intervals.end());
+    // Remove duplicates
+    intervals.erase(std::unique(intervals.begin(), intervals.end()), intervals.end());
+    return intervals;
+}
+
+// Try to match an interval set against known chord qualities
+static bool matchQuality(const std::vector<int> &intervals, ChordQuality &outQuality)
+{
+    // Check each quality
+    for (int q = 0; q <= static_cast<int>(ChordQuality::Power); ++q)
+    {
+        auto quality = static_cast<ChordQuality>(q);
+        const auto &ref = ChordEvent::getIntervals(quality);
+        if (intervals.size() >= ref.size())
+        {
+            // Check if ref is a subset of intervals
+            bool match = true;
+            for (int r : ref)
+            {
+                if (std::find(intervals.begin(), intervals.end(), r) == intervals.end())
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match)
+            {
+                outQuality = quality;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+ChordResult identify(const std::vector<int> &pitchClasses)
+{
+    ChordResult result;
+    if (pitchClasses.empty())
+        return result;
+
+    if (pitchClasses.size() == 1)
+    {
+        // Single note = power chord (root + implied 5th)
+        result.root = pitchClasses[0];
+        result.quality = ChordQuality::Power;
+        result.recognized = true;
+        return result;
+    }
+
+    // Try each pitch class as a candidate root, prefer the lowest
+    for (int pc : pitchClasses)
+    {
+        auto intervals = intervalsFrom(pitchClasses, pc);
+        ChordQuality quality;
+        if (matchQuality(intervals, quality))
+        {
+            result.root = pc;
+            result.quality = quality;
+            result.recognized = true;
+            return result;
+        }
+    }
+
+    // Fallback: use lowest pitch class as root, call it Major
+    result.root = pitchClasses[0];
+    result.quality = ChordQuality::Major;
+    result.recognized = false;
+    return result;
+}
+
+std::string chordName(int root, ChordQuality quality)
+{
+    std::string name = noteNames[root % 12];
+    switch (quality)
+    {
+        case ChordQuality::Major: break;  // Just the note name
+        case ChordQuality::Minor: name += "m"; break;
+        case ChordQuality::Dominant7: name += "7"; break;
+        case ChordQuality::Major7: name += "maj7"; break;
+        case ChordQuality::Minor7: name += "m7"; break;
+        case ChordQuality::Diminished: name += "dim"; break;
+        case ChordQuality::Augmented: name += "aug"; break;
+        case ChordQuality::Sus2: name += "sus2"; break;
+        case ChordQuality::Sus4: name += "sus4"; break;
+        case ChordQuality::Power: name += "5"; break;
+    }
+    return name;
+}
+
+std::string chordName(const ChordEvent &ev)
+{
+    return chordName(ev.root, ev.quality);
+}
+
+} // namespace ChordRecognition
+
+// ============================================================================
+// ChordTrack
+// ============================================================================
+
+ChordTrack::ChordTrack()
+{
+    pattern.bars = 4;
+}
+
+ChordTrack::ChordTrack(const ChordTrack &other)
+    : pattern(other.pattern),
+      tempoMultiplier(other.tempoMultiplier.load()),
+      pendingTempoMultiplier(other.pendingTempoMultiplier.load())
+{
+}
+
+ChordTrack &ChordTrack::operator=(const ChordTrack &other)
+{
+    if (this != &other)
+    {
+        pattern = other.pattern;
+        tempoMultiplier.store(other.tempoMultiplier.load());
+        pendingTempoMultiplier.store(other.pendingTempoMultiplier.load());
+    }
+    return *this;
+}
+
+void ChordTrack::rebuildChords(ChordProgression &prog) const
+{
+    prog.events.clear();
+
+    if (pattern.notes.empty())
+    {
+        prog.active = false;
+        return;
+    }
+
+    // Group notes by beat position (within tolerance)
+    constexpr double tolerance = 0.01;
+    std::vector<std::pair<double, std::vector<int>>> groups;
+
+    for (const auto &note : pattern.notes)
+    {
+        // Find existing group at this beat
+        bool found = false;
+        for (auto &group : groups)
+        {
+            if (std::abs(group.first - note.startBeat) < tolerance)
+            {
+                group.second.push_back(note.pitch % 12);
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            groups.push_back({note.startBeat, {note.pitch % 12}});
+    }
+
+    // Sort groups by beat
+    std::sort(groups.begin(), groups.end(),
+              [](const auto &a, const auto &b) { return a.first < b.first; });
+
+    // Analyze each group into a chord event
+    for (const auto &group : groups)
+    {
+        // Deduplicate pitch classes
+        auto pcs = group.second;
+        std::sort(pcs.begin(), pcs.end());
+        pcs.erase(std::unique(pcs.begin(), pcs.end()), pcs.end());
+
+        auto result = ChordRecognition::identify(pcs);
+
+        ChordEvent ev;
+        ev.startBeat = group.first;
+        ev.root = result.root;
+        ev.quality = result.quality;
+        prog.events.push_back(ev);
+    }
+
+    prog.sort();
+    prog.active = !prog.events.empty();
+}
+
+void ChordTrack::toXML(TiXmlElement *parent) const
+{
+    TiXmlElement trackEl("chord_track");
+    trackEl.SetDoubleAttribute("tempoMul", tempoMultiplier.load());
+    pattern.toXML(&trackEl);
+    parent->InsertEndChild(trackEl);
+}
+
+void ChordTrack::fromXML(TiXmlElement *element)
+{
+    double tm = 1.0;
+    element->QueryDoubleAttribute("tempoMul", &tm);
+    tempoMultiplier.store(tm);
+    pendingTempoMultiplier.store(tm);
+
+    if (TiXmlElement *patternEl = element->FirstChildElement("pattern"))
+        pattern.fromXML(patternEl);
+}
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -587,6 +806,8 @@ void Pattern::toXML(TiXmlElement *parent) const
     TiXmlElement patternEl("pattern");
     patternEl.SetAttribute("bars", bars);
     patternEl.SetDoubleAttribute("swing", swing);
+    if (snapToChord)
+        patternEl.SetAttribute("snapToChord", 1);
 
     for (const auto &lr : loopRegions)
     {
@@ -614,6 +835,9 @@ void Pattern::fromXML(TiXmlElement *element)
     loopRegions.clear();
     element->QueryIntAttribute("bars", &bars);
     element->QueryDoubleAttribute("swing", &swing);
+    int stc = 0;
+    element->QueryIntAttribute("snapToChord", &stc);
+    snapToChord = (stc != 0);
 
     for (TiXmlElement *loopEl = element->FirstChildElement("loop"); loopEl;
          loopEl = loopEl->NextSiblingElement("loop"))
@@ -893,6 +1117,8 @@ void GrooveboxProject::reset()
     for (int i = 0; i < NUM_GLOBAL_FX; i++)
         globalFX[i] = GlobalFXSlot();
 
+    chordTrack = ChordTrack();
+    chordTrack.pattern.bars = loopBars;
     chordProgression.clear();
 
     projectName = "Untitled";
@@ -947,7 +1173,8 @@ void GrooveboxProject::toXML(TiXmlDocument &doc)
     for (int i = 0; i < NUM_VOICES; i++)
         voices[i].toXML(&root, i);
 
-    // Chord progression
+    // Chord track and derived progression
+    chordTrack.toXML(&root);
     chordProgression.toXML(&root);
 
     // Metadata
@@ -1023,9 +1250,15 @@ void GrooveboxProject::fromXML(TiXmlDocument &doc)
             voices[index].fromXML(voiceEl, index);
     }
 
-    // Chord progression
+    // Chord track
+    if (TiXmlElement *chordTrackEl = root->FirstChildElement("chord_track"))
+        chordTrack.fromXML(chordTrackEl);
+
+    // Chord progression (rebuild from chord track, or load saved)
     if (TiXmlElement *chordProgEl = root->FirstChildElement("chord_progression"))
         chordProgression.fromXML(chordProgEl);
+    else
+        chordTrack.rebuildChords(chordProgression);
 
     if (TiXmlElement *metaEl = root->FirstChildElement("meta"))
     {

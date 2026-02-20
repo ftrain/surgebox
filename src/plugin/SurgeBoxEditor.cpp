@@ -19,6 +19,10 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
     setLookAndFeel(&lookAndFeel_);
 
     engine_.onVoiceChanged = [this](int v) { onVoiceChanged(v); };
+    engine_.onChordProgressionChanged = [this]() {
+        if (pianoRoll_)
+            pianoRoll_->rebuildChordShadings();
+    };
 
     // Create command bar
     commandBar_ = std::make_unique<SurgeBox::CommandBar>(engine_);
@@ -53,6 +57,10 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
 
     commandBar_->getVoiceSelector().onFXSelected = [this](bool showFX) {
         showMasterFXEditor(showFX);
+    };
+
+    commandBar_->getVoiceSelector().onChordTrackSelected = [this](bool showChords) {
+        showChordTrackEditor(showChords);
     };
 
     commandBar_->onSavePreset = [this]() {
@@ -258,6 +266,7 @@ SurgeBoxEditor::~SurgeBoxEditor()
 {
     stopTimer();
     engine_.onVoiceChanged = nullptr;
+    engine_.onChordProgressionChanged = nullptr;
 
     if (pianoKeyboard_)
     {
@@ -624,6 +633,56 @@ void SurgeBoxEditor::onVoiceChanged(int voice)
 
     commandBar_->getVoiceSelector().selectVoice(voice);
     resized();
+}
+
+void SurgeBoxEditor::showChordTrackEditor(bool show)
+{
+    showingChordTrack_ = show;
+    engine_.setChordTrackSelected(show);
+
+    if (show)
+    {
+        // Remove instrument editor from viewport
+        if (instrumentEditor_)
+        {
+            instrumentViewport_->setViewedComponent(nullptr, false);
+            instrumentEditorWrapper_.reset();
+            instrumentEditor_.reset();
+            currentEditorVoice_ = -1;
+        }
+
+        // Show chord track placeholder in instrument viewport
+        auto placeholder = std::make_unique<juce::Component>();
+        auto* label = new juce::Label("chord-placeholder",
+            "Chord Track\n\nEnter chords in the piano roll below.\nChords are auto-detected from notes.");
+        label->setJustificationType(juce::Justification::centred);
+        label->setFont(juce::Font(18.0f));
+        label->setColour(juce::Label::textColourId, juce::Colours::grey);
+        label->setBounds(0, 0, 600, 200);
+        placeholder->addAndMakeVisible(label);
+        placeholder->setSize(600, 200);
+        instrumentViewport_->setViewedComponent(placeholder.release(), true);
+
+        // Set piano roll to chord track model with limited range
+        auto* model = engine_.getChordTrackModel();
+        pianoRoll_->setPatternModel(model);
+
+        // Use fixed pitches for chord entry range (C3-C5, 2 octaves)
+        std::vector<int> chordPitches;
+        for (int p = SurgeBox::ChordTrack::LOWEST_NOTE; p <= SurgeBox::ChordTrack::HIGHEST_NOTE; ++p)
+            chordPitches.push_back(p);
+        pianoRoll_->setFixedPitches(chordPitches);
+        pianoKeyboard_->setDrumMode(false);  // Use normal key display
+
+        commandBar_->updateMeasuresLabel();
+        resized();
+    }
+    else
+    {
+        // Restore to current voice
+        instrumentViewport_->setViewedComponent(nullptr, false);
+        onVoiceChanged(engine_.getActiveVoice());
+    }
 }
 
 void SurgeBoxEditor::showMasterFXEditor(bool show)

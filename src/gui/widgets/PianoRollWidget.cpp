@@ -106,6 +106,7 @@ void PianoRollWidget::setPatternModel(PatternModel* model)
     activeLoopIndex_ = -1;
     draggingNoteIndex_ = -1;
     rebuildGhostNotes();
+    rebuildChordShadings();
 
     // Update all layers with new model
     gridLayer_->setPatternModel(model);
@@ -317,6 +318,8 @@ PianoRoll::RenderParams PianoRollWidget::buildRenderParams() const
     params.selectedNotes = &selection_.getSelection();
     params.isChromatic = fixedPitches_.empty() && (scaleType_ == ScaleType::Chromatic);
     params.scaleRoot = scaleRoot_;
+    if (!chordShadings_.empty())
+        params.chordShadings = &chordShadings_;
     return params;
 }
 
@@ -1078,6 +1081,41 @@ void PianoRollWidget::rebuildGhostNotes()
 
     ghostNoteLayer_->setGhostNotes(&ghostNotes_);
     ghostNoteLayer_->repaint();
+}
+
+void PianoRollWidget::rebuildChordShadings()
+{
+    chordShadings_.clear();
+
+    if (!engine_ || !patternModel_)
+        return;
+
+    const auto &prog = engine_->getProject().chordProgression;
+    if (!prog.active || prog.events.empty())
+        return;
+
+    double patLen = patternModel_->lengthInBeats();
+
+    for (size_t i = 0; i < prog.events.size(); ++i)
+    {
+        const auto &ev = prog.events[i];
+        double endBeat = (i + 1 < prog.events.size()) ? prog.events[i + 1].startBeat : patLen;
+
+        PianoRoll::ChordShading cs;
+        cs.startBeat = ev.startBeat;
+        cs.endBeat = endBeat;
+        cs.chordName = ChordRecognition::chordName(ev);
+
+        // Build pitch classes for this chord
+        const auto &intervals = ChordEvent::getIntervals(ev.quality);
+        for (int interval : intervals)
+            cs.chordPitchClasses.push_back((ev.root + interval) % 12);
+
+        chordShadings_.push_back(std::move(cs));
+    }
+
+    // Trigger grid repaint via pushRenderParams
+    pushRenderParams();
 }
 
 bool PianoRollWidget::isInLoopedRegion(double beat, int pitch) const

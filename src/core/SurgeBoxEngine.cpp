@@ -357,19 +357,32 @@ void SequencerEngine::triggerNotesInRange(double startBeat, double endBeat, int 
         // noteOffsetBeatsVoiceTime: offset from wrappedStart in voice-time
         auto addNoteOnDirect = [&](uint8_t pitch, uint8_t velocity, double duration,
                                    double noteOffsetBeatsVoiceTime) {
+            // Apply snapToChord: snap pitch to nearest chord tone when enabled
+            uint8_t finalPitch = pitch;
+            if (voice.pattern.snapToChord && project_->chordProgression.active)
+            {
+                double noteBeat = wrappedStart + noteOffsetBeatsVoiceTime;
+                if (noteBeat >= patternLength)
+                    noteBeat -= patternLength;
+                const ChordEvent *chord = project_->chordProgression.chordAtBeat(noteBeat);
+                if (chord)
+                    finalPitch = static_cast<uint8_t>(
+                        std::clamp(chord->findNearestChordTone(finalPitch), 0, 127));
+            }
+
             double noteOffsetGlobal = multiplier > 0
                 ? noteOffsetBeatsVoiceTime / multiplier
                 : noteOffsetBeatsVoiceTime;
             int samplePos = baseSampleOffset + static_cast<int>(noteOffsetGlobal / beatsPerSample_);
             samplePos = std::clamp(samplePos, 0, numSamples - 1);
             midiBuffers[v]->addEvent(
-                juce::MidiMessage::noteOn(1, pitch, (juce::uint8)velocity),
+                juce::MidiMessage::noteOn(1, finalPitch, (juce::uint8)velocity),
                 samplePos);
             double durationGlobal = multiplier > 0
                 ? duration / multiplier
                 : duration;
             double noteEndGlobal = startBeat + noteOffsetGlobal + durationGlobal;
-            activeNotes_.push_back({v, pitch, noteEndGlobal});
+            activeNotes_.push_back({v, finalPitch, noteEndGlobal});
         };
 
         // Process a source note: either directly or through the kernel
@@ -487,6 +500,13 @@ SurgeBoxEngine::SurgeBoxEngine()
         patternModels_[i]->setAutoSyncPattern(&project_.voices[i].pattern);
     }
 
+    // Create chord track pattern model with auto-rebuild of chord progression
+    chordTrackModel_ = std::make_unique<PatternModel>(&undoManager_);
+    chordTrackModel_->setAutoSyncPattern(&project_.chordTrack.pattern);
+    chordTrackModel_->onPatternChanged = [this]() {
+        rebuildChordProgression();
+    };
+
     // Connect project model to project for auto-sync
     projectModel_.setProject(&project_);
 
@@ -587,6 +607,8 @@ void SurgeBoxEngine::shutdown()
         if (model)
             model->onPatternChanged = nullptr;
     }
+    if (chordTrackModel_)
+        chordTrackModel_->onPatternChanged = nullptr;
 
     sequencer_.stop();
     masterFXChain_.shutdown();
@@ -876,6 +898,8 @@ void SurgeBoxEngine::syncPatternModelsFromProject()
         if (patternModels_[i])
             patternModels_[i]->loadFromPattern(project_.voices[i].pattern);
     }
+    if (chordTrackModel_)
+        chordTrackModel_->loadFromPattern(project_.chordTrack.pattern);
     projectModel_.syncFromProject();
 }
 
@@ -886,6 +910,27 @@ void SurgeBoxEngine::syncPatternModelsToProject()
         if (patternModels_[i])
             patternModels_[i]->saveToPattern(project_.voices[i].pattern);
     }
+    if (chordTrackModel_)
+        chordTrackModel_->saveToPattern(project_.chordTrack.pattern);
+}
+
+PatternModel *SurgeBoxEngine::getActivePatternModel()
+{
+    if (chordTrackSelected_)
+        return chordTrackModel_.get();
+    return getPatternModel(activeVoice_);
+}
+
+void SurgeBoxEngine::setChordTrackSelected(bool selected)
+{
+    chordTrackSelected_ = selected;
+}
+
+void SurgeBoxEngine::rebuildChordProgression()
+{
+    project_.chordTrack.rebuildChords(project_.chordProgression);
+    if (onChordProgressionChanged)
+        onChordProgressionChanged();
 }
 
 } // namespace SurgeBox

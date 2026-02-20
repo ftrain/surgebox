@@ -18,19 +18,33 @@ VoiceSelector::VoiceSelector()
 
     multiSwitch_ = std::make_unique<Widgets::MultiSwitch>();
     multiSwitch_->setRows(1);
-    multiSwitch_->setColumns(NUM_VOICES + 1);
-    multiSwitch_->setLabels({"1", "2", "3", "4", "FX"});
+    multiSwitch_->setColumns(NUM_VOICES + 2);
+    multiSwitch_->setLabels({"1", "2", "3", "4", "CH", "FX"});
 
     multiSwitch_->onValueChanged = [this](int index) {
-        if (index == NUM_VOICES)
+        if (index == NUM_VOICES + 1)
         {
+            // FX button
+            if (onChordTrackSelected)
+                onChordTrackSelected(false);
             if (onFXSelected)
                 onFXSelected(true);
         }
-        else
+        else if (index == NUM_VOICES)
         {
+            // Chord track button
             if (onFXSelected)
                 onFXSelected(false);
+            if (onChordTrackSelected)
+                onChordTrackSelected(true);
+        }
+        else
+        {
+            // Voice button
+            if (onFXSelected)
+                onFXSelected(false);
+            if (onChordTrackSelected)
+                onChordTrackSelected(false);
             if (engine_)
                 engine_->setActiveVoice(index);
         }
@@ -54,6 +68,11 @@ void VoiceSelector::selectVoice(int voice)
 }
 
 void VoiceSelector::selectFX()
+{
+    multiSwitch_->setValue(NUM_VOICES + 1);
+}
+
+void VoiceSelector::selectChordTrack()
 {
     multiSwitch_->setValue(NUM_VOICES);
 }

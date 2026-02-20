@@ -155,8 +155,16 @@ class SurgeBoxEngine
 
     // Pattern models (with undo support)
     PatternModel *getPatternModel(int voice);
-    PatternModel *getActivePatternModel() { return getPatternModel(activeVoice_); }
+    PatternModel *getActivePatternModel();
+    PatternModel *getChordTrackModel() { return chordTrackModel_.get(); }
     juce::UndoManager &getUndoManager() { return undoManager_; }
+
+    // Chord track selection (separate from voice selection)
+    bool isChordTrackSelected() const { return chordTrackSelected_; }
+    void setChordTrackSelected(bool selected);
+
+    // Rebuild chord progression from chord track pattern
+    void rebuildChordProgression();
 
     // Project model (with undo support for non-pattern state)
     ProjectModel &getProjectModel() { return projectModel_; }
@@ -216,6 +224,7 @@ class SurgeBoxEngine
     // Callbacks for UI updates
     std::function<void(int)> onVoiceChanged;
     std::function<void(double)> onPlayheadMoved;
+    std::function<void()> onChordProgressionChanged;
 
   private:
     void mixVoices(float *outputL, float *outputR, int numSamples);
@@ -234,6 +243,8 @@ class SurgeBoxEngine
     ProjectModel projectModel_;
     MidiMappingEngine midiMappingEngine_;
     std::array<std::unique_ptr<PatternModel>, NUM_VOICES> patternModels_;
+    std::unique_ptr<PatternModel> chordTrackModel_;
+    bool chordTrackSelected_{false};
 
     int activeVoice_{0};
     double sampleRate_{44100.0};

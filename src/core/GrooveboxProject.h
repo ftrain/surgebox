@@ -226,6 +226,48 @@ struct ChordProgression
 };
 
 // ============================================================================
+// Chord Track — a control track whose notes define the chord progression
+// ============================================================================
+
+namespace ChordRecognition
+{
+    struct ChordResult
+    {
+        int root{0};
+        ChordQuality quality{ChordQuality::Major};
+        bool recognized{false};
+    };
+
+    // Given a set of pitch classes (0-11), identify chord quality and root
+    ChordResult identify(const std::vector<int> &pitchClasses);
+
+    // Human-readable chord name: "C", "Am7", "F#dim", etc.
+    std::string chordName(int root, ChordQuality quality);
+    std::string chordName(const ChordEvent &ev);
+} // namespace ChordRecognition
+
+struct ChordTrack
+{
+    Pattern pattern;
+    std::atomic<double> tempoMultiplier{1.0};
+    std::atomic<double> pendingTempoMultiplier{1.0};
+
+    // Limited pitch range for chord entry (2 octaves: C3–C5)
+    static constexpr int LOWEST_NOTE = 48;
+    static constexpr int HIGHEST_NOTE = 73;
+
+    ChordTrack();
+    ChordTrack(const ChordTrack &other);
+    ChordTrack &operator=(const ChordTrack &other);
+
+    // Analyze pattern notes into ChordProgression events
+    void rebuildChords(ChordProgression &prog) const;
+
+    void toXML(TiXmlElement *parent) const;
+    void fromXML(TiXmlElement *element);
+};
+
+// ============================================================================
 // Pattern
 // ============================================================================
 
@@ -236,6 +278,7 @@ struct Pattern
     double swing{0.0};
     std::vector<LoopRegion> loopRegions;
     PatternKernel kernel;
+    bool snapToChord{false};  // When true, snap all note pitches to the active chord
 
     double lengthInBeats() const { return bars * 4.0; }
 
@@ -323,7 +366,8 @@ class GrooveboxProject
 
     std::array<VoiceState, NUM_VOICES> voices;
     std::array<GlobalFXSlot, NUM_GLOBAL_FX> globalFX;
-    ChordProgression chordProgression;
+    ChordTrack chordTrack;
+    ChordProgression chordProgression;  // Derived from chordTrack.pattern
 
     std::string projectName{"Untitled"};
     std::string author;

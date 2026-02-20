@@ -65,12 +65,14 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     // Master FX editor (shown in instrument viewport when FX button is toggled)
     std::unique_ptr<SurgeBox::MasterFXEditor> masterFXEditor_;
     bool showingMasterFX_{false};
+    bool showingChordTrack_{false};
 
     void rebuildInstrumentEditor();
     void onVoiceChanged(int voice);
     void updateKeyboardListener();
     void updateInstrumentEditorScale();
     void showMasterFXEditor(bool show);
+    void showChordTrackEditor(bool show);
 
     SurgeBox::SurgeBoxLookAndFeel lookAndFeel_;
 

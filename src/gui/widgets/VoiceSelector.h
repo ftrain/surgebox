@@ -28,8 +28,10 @@ class VoiceSelector : public juce::Component
 
     void selectVoice(int voice);
     void selectFX();
+    void selectChordTrack();
 
     std::function<void(bool)> onFXSelected;
+    std::function<void(bool)> onChordTrackSelected;
 
   private:
     SurgeBoxEngine *engine_{nullptr};

@@ -37,6 +37,10 @@ double PatternModel::getSwing() const { return tree_.getProperty(IDs::swing, 0.0
 
 void PatternModel::setSwing(double swing) { tree_.setProperty(IDs::swing, swing, undoManager_); }
 
+bool PatternModel::getSnapToChord() const { return tree_.getProperty(IDs::snapToChord, false); }
+
+void PatternModel::setSnapToChord(bool snap) { tree_.setProperty(IDs::snapToChord, snap, undoManager_); }
+
 juce::ValueTree PatternModel::createNoteTree(double startBeat, double duration, int pitch,
                                               int velocity)
 {
@@ -228,6 +232,7 @@ void PatternModel::loadFromPattern(const Pattern &pattern)
 
     tree_.setProperty(IDs::bars, pattern.bars, nullptr);
     tree_.setProperty(IDs::swing, pattern.swing, nullptr);
+    tree_.setProperty(IDs::snapToChord, pattern.snapToChord, nullptr);
     loopRegions_ = pattern.loopRegions;
 
     for (const auto &note : pattern.notes)
@@ -242,6 +247,7 @@ void PatternModel::saveToPattern(Pattern &pattern) const
 {
     pattern.bars = getBars();
     pattern.swing = getSwing();
+    pattern.snapToChord = getSnapToChord();
     pattern.loopRegions = loopRegions_;
     pattern.notes.clear();
 
