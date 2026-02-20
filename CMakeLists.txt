@@ -267,6 +267,9 @@ target_sources(surgebox PRIVATE
     # GUI - Master FX Editor
     src/gui/widgets/MasterFXEditor.cpp
     src/gui/widgets/MasterFXEditor.h
+    # GUI - Kernel Editor
+    src/gui/widgets/KernelEditorPanel.cpp
+    src/gui/widgets/KernelEditorPanel.h
     # GUI - Piano Roll
     src/gui/widgets/PianoRollWidget.cpp
     src/gui/widgets/PianoRollWidget.h

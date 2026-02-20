@@ -14,6 +14,7 @@
 #include "gui/widgets/PianoRollWidget.h"
 #include "gui/widgets/PianoKeyboardWidget.h"
 #include "gui/widgets/MasterFXEditor.h"
+#include "gui/widgets/KernelEditorPanel.h"
 #include "gui/SurgeBoxLookAndFeel.h"
 #include "gui/Layout.h"
 #include "core/VoicePreset.h"
@@ -67,12 +68,17 @@ class SurgeBoxEditor : public juce::AudioProcessorEditor,
     bool showingMasterFX_{false};
     bool showingChordTrack_{false};
 
+    // Kernel editor (shown in instrument viewport when K button is toggled)
+    std::unique_ptr<SurgeBox::KernelEditorPanel> kernelEditor_;
+    bool showingKernelEditor_{false};
+
     void rebuildInstrumentEditor();
     void onVoiceChanged(int voice);
     void updateKeyboardListener();
     void updateInstrumentEditorScale();
     void showMasterFXEditor(bool show);
     void showChordTrackEditor(bool show);
+    void showKernelEditor(bool show);
 
     SurgeBox::SurgeBoxLookAndFeel lookAndFeel_;
 

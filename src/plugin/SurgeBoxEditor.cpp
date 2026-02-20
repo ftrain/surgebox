@@ -63,6 +63,10 @@ SurgeBoxEditor::SurgeBoxEditor(SurgeBoxProcessor& p)
         showChordTrackEditor(showChords);
     };
 
+    commandBar_->getVoiceSelector().onKernelSelected = [this](bool showKernel) {
+        showKernelEditor(showKernel);
+    };
+
     commandBar_->onSavePreset = [this]() {
         int voice = engine_.getActiveVoice();
         engine_.captureAllVoices();
@@ -290,6 +294,11 @@ SurgeBoxEditor::~SurgeBoxEditor()
         auto* surgeProc = processor_.getSurgeProcessor(i);
         if (surgeProc)
             surgeProc->midiKeyboardState.removeListener(this);
+    }
+
+    if (kernelEditor_)
+    {
+        kernelEditor_->onKernelChanged = nullptr;
     }
 
     if (instrumentEditor_)
@@ -627,8 +636,10 @@ void SurgeBoxEditor::onVoiceChanged(int voice)
     commandBar_->updateTempoMultiplier(multiplier);
     commandBar_->updateInstrumentSelector();
 
-    // If showing master FX, keep it visible; otherwise rebuild instrument editor
-    if (!showingMasterFX_)
+    // If showing special editors, keep them visible; otherwise rebuild instrument editor
+    if (showingKernelEditor_ && kernelEditor_)
+        kernelEditor_->refreshFromPattern();
+    else if (!showingMasterFX_)
         rebuildInstrumentEditor();
 
     commandBar_->getVoiceSelector().selectVoice(voice);
@@ -682,6 +693,51 @@ void SurgeBoxEditor::showChordTrackEditor(bool show)
         // Restore to current voice
         instrumentViewport_->setViewedComponent(nullptr, false);
         onVoiceChanged(engine_.getActiveVoice());
+    }
+}
+
+void SurgeBoxEditor::showKernelEditor(bool show)
+{
+    showingKernelEditor_ = show;
+
+    if (show)
+    {
+        // Remove instrument editor from viewport
+        if (instrumentEditor_)
+        {
+            instrumentViewport_->setViewedComponent(nullptr, false);
+            instrumentEditorWrapper_.reset();
+            instrumentEditor_.reset();
+            currentEditorVoice_ = -1;
+        }
+
+        // Create kernel editor and show in viewport
+        if (!kernelEditor_)
+        {
+            kernelEditor_ = std::make_unique<SurgeBox::KernelEditorPanel>();
+            kernelEditor_->setEngine(&engine_);
+            kernelEditor_->onKernelChanged = [this]() {
+                if (pianoRoll_)
+                {
+                    pianoRoll_->rebuildGhostNotes();
+                    pianoRoll_->rebuildChordShadings();
+                }
+            };
+        }
+
+        kernelEditor_->refreshFromPattern();
+        kernelEditor_->setSize(instrumentViewport_->getWidth(),
+                                std::max(400, instrumentViewport_->getHeight()));
+        instrumentViewport_->setViewedComponent(kernelEditor_.get(), false);
+    }
+    else
+    {
+        // Remove kernel editor
+        instrumentViewport_->setViewedComponent(nullptr, false);
+        kernelEditor_.reset();
+
+        // Restore instrument editor
+        rebuildInstrumentEditor();
     }
 }
 

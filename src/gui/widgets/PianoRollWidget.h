@@ -95,6 +95,9 @@ class PianoRollWidget : public juce::Component
     // Rebuild chord shading from engine's chord progression
     void rebuildChordShadings();
 
+    // Rebuild ghost notes (kernel previews, loop tiles)
+    void rebuildGhostNotes();
+
   private:
     // Layers
     std::unique_ptr<GridLayer> gridLayer_;
@@ -111,7 +114,6 @@ class PianoRollWidget : public juce::Component
     std::unique_ptr<PianoRoll::SelectionToolbar> selectionToolbar_;
     void showSelectionToolbar(juce::Point<int> position);
     void hideSelectionToolbar();
-    void rebuildGhostNotes();
 
     // Toolbar operations
     void performLoop();
